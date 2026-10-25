@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+hmcl-fork/
+ui-shots/
+ui-mockup/
+ui/dev-state.json
+runtime/
+jre/
+.DS_Store

@@ -1,0 +1,74 @@
+{
+ "DelightoFlight-1.21.1-1.3.2.jar": {
+  "fileID": 7530265,
+  "name": "DelightoFlight-1.21.1-1.3.2.jar",
+  "sha1": "99a3bbdfd162d32b5f881601370b1a3ed5eab44c",
+  "size": 614134,
+  "slug": "delighto-flight",
+  "url": "https://mediafilez.forgecdn.net/files/7530/265/DelightoFlight-1.21.1-1.3.2.jar"
+ },
+ "barbequesdelight-1.2.2.jar": {
+  "fileID": 6849166,
+  "name": "barbequesdelight-1.2.2.jar",
+  "sha1": "13d76c0c793e6a865931866735ea6aec80842f73",
+  "size": 846060,
+  "slug": "barbeques-delight",
+  "url": "https://mediafilez.forgecdn.net/files/6849/166/barbequesdelight-1.2.2.jar"
+ },
+ "cupboard-1.21-2.9.jar": {
+  "fileID": 6078150,
+  "name": "cupboard-1.21-2.9.jar",
+  "sha1": "8f6eb497f60fb6a2cf2b276113d33e61b9a5c2a5",
+  "size": 23509,
+  "slug": "cupboard",
+  "url": "https://mediafilez.forgecdn.net/files/6078/150/cupboard-1.21-2.9.jar"
+ },
+ "dynamiclights-1.21.1.2NF.jar": {
+  "fileID": 6182439,
+  "name": "dynamiclights-1.21.1.2NF.jar",
+  "sha1": "22f928d753ea6a6c05706ff7782c614ad12a75d1",
+  "size": 49110,
+  "slug": "dynamic-lights",
+  "url": "https://mediafilez.forgecdn.net/files/6182/439/dynamiclights-1.21.1.2NF.jar"
+ },
+ "framework-neoforge-1.21.1-0.13.11.jar": {
+  "fileID": 7530361,
+  "name": "framework-neoforge-1.21.1-0.13.11.jar",
+  "sha1": "e46eb138fbb13a12f37154fb4ec407d64b326475",
+  "size": 387334,
+  "slug": "framework",
+  "url": "https://mediafilez.forgecdn.net/files/7530/361/framework-neoforge-1.21.1-0.13.11.jar"
+ },
+ "galaxysimagination-1.0-SNAPSHOT.jar": {
+  "fileID": 6873866,
+  "name": "galaxysimagination-1.0-SNAPSHOT.jar",
+  "sha1": "af5fb9bf33fe3e25d8bb8531601dea96eba3ada9",
+  "size": 47060,
+  "slug": "galaxysimagination",
+  "url": "https://mediafilez.forgecdn.net/files/6873/866/galaxysimagination-1.0-SNAPSHOT.jar"
+ },
+ "kotlinforforge-5.11.0-all.jar": {
+  "fileID": 7471280,
+  "name": "kotlinforforge-5.11.0-all.jar",
+  "sha1": "a8b9f1233336ca9fe4702bc2cc5a6f97ad5e3b65",
+  "size": 6869790,
+  "slug": "kotlin-for-forge",
+  "url": "https://mediafilez.forgecdn.net/files/7471/280/kotlinforforge-5.11.0-all.jar"
+ },
+ "refurbished_furniture-neoforge-1.21.1-1.0.22.jar": {
+  "fileID": 7473565,
+  "name": "refurbished_furniture-neoforge-1.21.1-1.0.22.jar",
+  "sha1": "6c209e6b755ff26218efd55aedf2dea49183d29b",
+  "size": 7133477,
+  "slug": "refurbished-furniture",
+  "url": "https://mediafilez.forgecdn.net/files/7473/565/refurbished_furniture-neoforge-1.21.1-1.0.22.jar"
+ },
+ "twilightforest-1.21.1-4.8.3287-universal.jar": {
+  "fileID": 7398100,
+  "name": "twilightforest-1.21.1-4.8.3287-universal.jar",
+  "sha1": "bd9102af8374a971b8f66cd0751de0c17a29f598",
+  "size": 27088062,
+  "slug": "the-twilight-forest",
+  "url": "https://mediafilez.forgecdn.net/files/7398/100/twilightforest-1.21.1-4.8.3287-universal.jar"
+ }
+}

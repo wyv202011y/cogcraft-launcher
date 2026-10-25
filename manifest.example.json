@@ -1,0 +1,128 @@
+{
+  "_说明": "cogcraft 客户端清单 v1 —— 服务器只托管这一个 JSON，文件本体走第三方直链",
+  "schema": 1,
+  "client_id": "cogcraft",
+  "client_name": "cogcraft 客户端",
+  "channel": "stable",
+  "updated": "2026-10-25T08:00:00+08:00",
+  "notice": "",
+
+  "minecraft": {
+    "version": "1.21.1",
+    "type": "release",
+    "_说明": "从 BMCLAPI 拉 version json / client.jar / libraries / assets"
+  },
+
+  "modloader": {
+    "type": "neoforge",
+    "version": "21.1.264",
+    "installer_url": "https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/21.1.264/neoforge-21.1.264-installer.jar",
+    "installer_sha1": "",
+    "_说明": "安装器由启动器下载后自动改写内部 URL 指向 BMCLAPI（自带 --mirror 实测无效）"
+  },
+
+  "server": {
+    "name": "像素工坊",
+    "address": "cogcraft.top:25565",
+    "auto_join": true,
+    "_说明": "auto_join=true 时用 --quickPlayMultiplayer 直接进服，玩家看不到主菜单"
+  },
+
+  "jvm": {
+    "extra_args": [
+      "-Djava.net.preferIPv4Stack=true"
+    ],
+    "_说明": "preferIPv4Stack 必须保留：cdn.modrinth.com 的 DNS 只返回 IPv6，玩家机器没有 IPv6 时会卡 40 秒。内存大小由启动器按硬件自动算，不在这里写死"
+  },
+
+  "variants": [
+    {
+      "id": "full",
+      "name": "高配版",
+      "desc": "138 个模组 · 完整视觉与体验",
+      "mods_count": 138,
+      "min_ram_mb": 6144,
+      "files": [
+        {
+          "path": "mods/[远景]DistantHorizons-3.3.3-1.21.1.jar",
+          "sha1": "填真实值",
+          "size": 28200000,
+          "source": "modrinth",
+          "url": "https://cdn.modrinth.com/data/uCdwusMi/versions/9w34y8ai/DistantHorizons-3.3.3-1.21.1-fabric-neoforge.jar"
+        },
+        {
+          "path": "mods/[客户端：现代化UI]ModernUI-NeoForge-1.21.1-3.12.0.2-universal.jar",
+          "sha1": "填真实值",
+          "size": 1234567,
+          "source": "modrinth",
+          "url": "https://cdn.modrinth.com/data/..."
+        },
+        {
+          "path": "mods/[锂离子]lithium-neoforge-0.15.3+mc1.21.1.jar",
+          "sha1": "填真实值",
+          "size": 800000,
+          "source": "modrinth",
+          "url": "https://cdn.modrinth.com/data/..."
+        },
+        {
+          "path": "mods/[自研]CogCraft管理模组.jar",
+          "sha1": "填真实值",
+          "size": 123456,
+          "source": "self",
+          "url": "https://www.cogcraft.top/client/files/cogcraft_management-1.0.0.jar",
+          "_说明": "source=self 的只有这类没有第三方来源的自研模组，才占用我们自己的带宽"
+        },
+        {
+          "path": "config/DistantHorizons.toml",
+          "sha1": "a92cc4363d637f457d423ffcc0ecdd2f",
+          "size": 37002,
+          "source": "self",
+          "url": "https://www.cogcraft.top/client/files/DistantHorizons.toml"
+        }
+      ],
+      "delete": []
+    },
+    {
+      "id": "simple",
+      "name": "流畅版",
+      "desc": "120 个模组 · 关闭重负载视觉模组",
+      "mods_count": 120,
+      "min_ram_mb": 3072,
+      "files": [
+        {
+          "path": "mods/[远景]DistantHorizons-3.3.3-1.21.1.jar",
+          "sha1": "填真实值",
+          "size": 28200000,
+          "source": "modrinth",
+          "url": "https://cdn.modrinth.com/data/uCdwusMi/versions/9w34y8ai/DistantHorizons-3.3.3-1.21.1-fabric-neoforge.jar"
+        },
+        {
+          "path": "mods/[自研]CogCraft管理模组.jar",
+          "sha1": "填真实值",
+          "size": 123456,
+          "source": "self",
+          "url": "https://www.cogcraft.top/client/files/cogcraft_management-1.0.0.jar"
+        },
+        {
+          "path": "config/DistantHorizons.toml",
+          "sha1": "a92cc4363d637f457d423ffcc0ecdd2f",
+          "size": 37002,
+          "source": "self",
+          "url": "https://www.cogcraft.top/client/files/DistantHorizons.toml"
+        }
+      ],
+      "delete": [
+        "mods/[客户端：现代化UI]ModernUI-NeoForge-1.21.1-3.12.0.2-universal.jar",
+        "mods/[锂离子]lithium-neoforge-0.15.3+mc1.21.1.jar"
+      ],
+      "_说明": "流畅版是高配版的真子集（实测 120 vs 138，没有多出任何文件），切换时按 delete 列表移除差异模组"
+    }
+  ],
+
+  "binding": {
+    "enabled": true,
+    "api": "https://www.cogcraft.top/client/bind",
+    "qq_group": "填群号",
+    "_说明": "启动器生成 6 位绑定码，玩家在群里发『绑定 <码>』，机器人回查群成员身份后写入绑定"
+  }
+}

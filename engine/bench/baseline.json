@@ -1,0 +1,12 @@
+{
+ "machine": "dev-i7-12700K",
+ "note": "5 次实测取中位数，JDK21 + G1 + 堆512MB。改机器需重跑并更新此文件。",
+ "jvm_flags": "-Xms512m -Xmx512m -XX:+UseG1GC -XX:-UsePerfData",
+ "metrics": {
+  "int_mops": 1097.8,
+  "chase_ns": 81.4,
+  "gc_pct": 2.67,
+  "stall_ms": 1.16,
+  "copy_gbs": 26.1
+ }
+}

@@ -18,34 +18,16 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Install deps
-        run: python -m pip install --upgrade pip pywebview pyinstaller
-
-      - name: Fetch bundled JRE 21
-        env:
-          JRE_ARCH: ${{ matrix.jre_arch }}
-        run: curl -fsSL -o /tmp/jre.tar.gz "https://api.adoptium.net/v3/binary/latest/21/ga/mac/${JRE_ARCH}/jre/hotspot/normal/eclipse"
-
-      # macOS 的 JRE 是 bundle 布局：jdk-21.x-jre/Contents/Home/bin/java
-      # 所以剥 4 层（jre 目录 / Contents / Home / bin）才能得到 runtime/bin/java
-      - name: Unpack JRE
-        run: mkdir -p runtime && tar xzf /tmp/jre.tar.gz -C runtime --strip-components=4 && ls -l runtime/bin/java && ./runtime/bin/java -version
-
-      - name: PyInstaller build
-        run: pyinstaller --noconfirm --windowed --onedir --name cogcraft --osx-bundle-identifier top.cogcraft.launcher --hidden-import webview.platforms.cocoa --add-data ui:ui --add-data engine:engine --add-data runtime:runtime --add-data manifest.example.json:. app.py
-
-      - name: Zip app
+      - name: Build
         env:
           ARCH: ${{ matrix.arch }}
-        run: cd dist && ditto -c -k --sequesterRsrc --keepParent cogcraft.app "cogcraft-macos-${ARCH}.zip"
-
+          JRE_ARCH: ${{ matrix.jre_arch }}
+        run: bash ci/build-macos.sh "$ARCH" "$JRE_ARCH"
       - uses: actions/upload-artifact@v4
         with:
           name: cogcraft-macos-${{ matrix.arch }}
-          path: dist/cogcraft-macos-${{ matrix.arch }}.zip
+          path: dist/cogcraft-macos-*.zip
           retention-days: 30

@@ -2,21 +2,17 @@ name: build-macos
 
 on:
   workflow_dispatch:
-  push:
-    tags: ['v*']
 
-# 为什么在 CI 里打 mac 包：PyInstaller 不支持交叉编译，
-# .app 必须在 macOS 上由 macOS 版 PyInstaller 生成。
 jobs:
   build:
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14      # Apple Silicon
+          - runner: macos-14
             arch: arm64
             jre_arch: aarch64
-          - runner: macos-13      # Intel
+          - runner: macos-13
             arch: x64
             jre_arch: x64
     runs-on: ${{ matrix.runner }}
@@ -25,47 +21,26 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
-      - name: 安装依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install pywebview pyinstaller
+      - name: Install deps
+        run: python -m pip install --upgrade pip pywebview pyinstaller
 
-      - name: 下载自带 JRE 21（Temurin）
+      - name: Fetch bundled JRE 21
         env:
           JRE_ARCH: ${{ matrix.jre_arch }}
-        run: |
-          set -euo pipefail
-          mkdir -p runtime
-          curl -fsSL -o jre.tar.gz \
-            "https://api.adoptium.net/v3/binary/latest/21/ga/mac/${JRE_ARCH}/jre/hotspot/normal/eclipse"
-          tar xzf jre.tar.gz -C runtime --strip-components=1
-          rm -f jre.tar.gz
-          ./runtime/bin/java -version
+        run: curl -fsSL -o /tmp/jre.tar.gz "https://api.adoptium.net/v3/binary/latest/21/ga/mac/${JRE_ARCH}/jre/hotspot/normal/eclipse"
 
-      - name: PyInstaller 打包
-        run: |
-          set -euo pipefail
-          pyinstaller --noconfirm --windowed --onedir \
-            --name cogcraft \
-            --osx-bundle-identifier top.cogcraft.launcher \
-            --hidden-import webview.platforms.cocoa \
-            --add-data "ui:ui" \
-            --add-data "engine:engine" \
-            --add-data "runtime:runtime" \
-            --add-data "manifest.example.json:." \
-            app.py
-          ls -la dist/
+      - name: Unpack JRE
+        run: mkdir -p runtime && tar xzf /tmp/jre.tar.gz -C runtime --strip-components=1 && ./runtime/bin/java -version
 
-      - name: 压缩成 zip
+      - name: PyInstaller build
+        run: pyinstaller --noconfirm --windowed --onedir --name cogcraft --osx-bundle-identifier top.cogcraft.launcher --hidden-import webview.platforms.cocoa --add-data ui:ui --add-data engine:engine --add-data runtime:runtime --add-data manifest.example.json:. app.py
+
+      - name: Zip app
         env:
           ARCH: ${{ matrix.arch }}
-        run: |
-          set -euo pipefail
-          cd dist
-          ditto -c -k --sequesterRsrc --keepParent cogcraft.app "cogcraft-macos-${ARCH}.zip"
-          ls -lh "cogcraft-macos-${ARCH}.zip"
+        run: cd dist && ditto -c -k --sequesterRsrc --keepParent cogcraft.app "cogcraft-macos-${ARCH}.zip"
 
       - uses: actions/upload-artifact@v4
         with:

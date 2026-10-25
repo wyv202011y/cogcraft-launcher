@@ -2,12 +2,12 @@
 """端到端测试：对着线上真实清单做完整文件同步。"""
 import sys, json, os, shutil, tempfile, time, hashlib
 
-R = "/home/server/Raid_5/个人文件夹/王樱博/启动器"
+R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, R + "/engine")
 import manifest as M
 import pipeline as P
 
-LOG = "/home/server/.hermes/cache/scratch/e2e_test.log"
+LOG = os.path.join(tempfile.gettempdir(), "cogcraft_e2e.log")
 
 def out(msg):
     print(msg, flush=True)

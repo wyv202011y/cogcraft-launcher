@@ -14,7 +14,27 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 HTML = os.path.join(ROOT, "ui", "index.html")
 STATE_JSON = os.path.join(ROOT, "ui", "dev-state.json")   # 由真实 app.state() 导出
 OUT = os.path.join(ROOT, "ui-shots")
-CHROME = "/home/server/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome"
+def _find_chrome() -> str:
+    """找无头 chromium：优先环境变量 CHROME，其次 playwright 缓存，最后系统 chrome。"""
+    env = os.environ.get("CHROME")
+    if env and os.path.isfile(env):
+        return env
+    import glob
+    for pat in ("~/.cache/ms-playwright/chromium-*/chrome-linux*/chrome",
+                "~/Library/Caches/ms-playwright/chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
+                "~/AppData/Local/ms-playwright/chromium-*/chrome-win*/chrome.exe"):
+        hits = sorted(glob.glob(os.path.expanduser(pat)))
+        if hits:
+            return hits[-1]
+    for name in ("chromium", "chromium-browser", "google-chrome"):
+        import shutil as _sh
+        f = _sh.which(name)
+        if f:
+            return f
+    raise SystemExit("找不到 chromium，请设置环境变量 CHROME=/path/to/chrome")
+
+
+CHROME = _find_chrome()
 W, H, SCALE = 1000, 640, 2
 
 # 名字 → (注入 JS, URL query)

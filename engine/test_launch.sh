@@ -2,10 +2,13 @@
 # cogcraft 拼装引擎 —— 无头启动验证
 # 用 Xvfb + Mesa 软件渲染跑一次真实客户端，看能否初始化到可玩状态
 set -u
-GD=/home/server/.hermes/cache/scratch/nf_install_cn
-LOG=/home/server/.hermes/cache/scratch/mc_launch_test.log
-ENGINE=/home/server/Raid_5/个人文件夹/王樱博/启动器/engine
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+ENGINE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORK="${TMPDIR:-/tmp}/cogcraft_launch_test"
+GD="$WORK/game"
+LOG="$WORK/mc_launch_test.log"
+mkdir -p "$WORK"
+export ENGINE
+export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}"
 export PATH="$JAVA_HOME/bin:$PATH"
 
 : > "$LOG"
@@ -13,10 +16,11 @@ export PATH="$JAVA_HOME/bin:$PATH"
 # 生成启动命令（写成 bash 数组形式）
 python3 - <<'PY' > /tmp/mc_cmd.sh
 import sys, shlex
-sys.path.insert(0, "/home/server/Raid_5/个人文件夹/王樱博/启动器/engine")
+import os
+sys.path.insert(0, os.environ["ENGINE"])
 from launch import build_command
 cmd, merged = build_command(
-    "/home/server/.hermes/cache/scratch/nf_install_cn",
+    os.environ["GD"],
     "neoforge-21.1.264",
     "/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
     {

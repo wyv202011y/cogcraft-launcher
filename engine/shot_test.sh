@@ -1,10 +1,14 @@
 #!/bin/bash
 # 无头启动客户端并截图（验证拼装引擎产出的客户端可正常运行）
 set -u
-GD=/home/server/.hermes/cache/scratch/nf_install_cn
-OUT=/home/server/.hermes/cache/scratch/cogcraft_client_boot.png
-RUNLOG=/home/server/.hermes/cache/scratch/mc_shot_run.log
-export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+ENGINE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORK="${TMPDIR:-/tmp}/cogcraft_shot_test"
+GD="$WORK/game"
+OUT="$WORK/cogcraft_client_boot.png"
+RUNLOG="$WORK/mc_shot_run.log"
+mkdir -p "$WORK"
+export ENGINE GD
+export JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-21-openjdk-amd64}"
 export PATH="$JAVA_HOME/bin:$PATH"
 export LIBGL_ALWAYS_SOFTWARE=1
 export MESA_GL_VERSION_OVERRIDE=4.5
@@ -21,13 +25,14 @@ echo "Xvfb pid=$XVFB_PID" >> "$RUNLOG"
 
 python3 - <<'PY' > /tmp/mc_cmd2.sh
 import sys, shlex
-sys.path.insert(0, "/home/server/Raid_5/个人文件夹/王樱博/启动器/engine")
+import os
+sys.path.insert(0, os.environ["ENGINE"])
 from launch import build_command
 cmd, m = build_command(
-    "/home/server/.hermes/cache/scratch/nf_install_cn",
+    os.environ["GD"],
     "neoforge-21.1.264",
     "/usr/lib/jvm/java-21-openjdk-amd64/bin/java",
-    {"player_name": "王樱博", "max_memory_mb": 2048, "server_address": "",
+    {"player_name": "Steve", "max_memory_mb": 2048, "server_address": "",
      "extra_jvm": ["-Djava.net.preferIPv4Stack=true"]})
 print("CMD=(" + " ".join(shlex.quote(c) for c in cmd) + ")")
 PY

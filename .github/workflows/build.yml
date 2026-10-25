@@ -1,6 +1,8 @@
 name: build
 
 # 所有构建都在 GitHub 的 runner 上做，本地一行命令都不用跑，也不需要暴露任何东西。
+# 平台只出两个：Windows x64（玩家主力）+ macOS arm64（Apple Silicon）。
+# 不做 x86 macOS —— Intel Mac 现在占比极低，多养一台 runner 不划算。
 # 手动触发出 test 包（Artifacts）；打 tag 出正式包并自动建 Release（玩家直接下载）。
 on:
   workflow_dispatch:
@@ -19,9 +21,6 @@ jobs:
           - runner: macos-14
             arch: arm64
             label: macos-arm64
-          - runner: macos-13
-            arch: x64
-            label: macos-x64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4

@@ -11,6 +11,13 @@ import subprocess
 import sys
 import zipfile
 
+# Windows runner 的控制台是 cp1252，直接 print 中文会 UnicodeEncodeError
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SEP = ";" if os.name == "nt" else ":"          # --add-data 的分隔符各平台不同
 

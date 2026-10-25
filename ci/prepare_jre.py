@@ -22,17 +22,28 @@ import tempfile
 import urllib.request
 import zipfile
 
+# Windows runner 的控制台是 cp1252，直接 print 中文会 UnicodeEncodeError
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # 不要写死 /tmp：Windows runner 上 "/tmp" 会落到当前盘符根目录，常常不存在
 TMP = os.path.join(tempfile.gettempdir(), "cogcraft_jre")
 JAVA_NAMES = ("java", "java.exe")
+UA = "cogcraft-launcher-ci/1.0 (+https://github.com/wyv202011y/cogcraft-launcher)"
 
 
 def download(url: str, dest: str, tries: int = 3) -> None:
     for i in range(1, tries + 1):
         try:
             print(f"下载 {url}（第 {i} 次）", flush=True)
-            with urllib.request.urlopen(url, timeout=180) as r, open(dest, "wb") as f:
+            # 必须带自己的 User-Agent：urllib 默认的 "Python-urllib/3.x"
+            # 会被 Adoptium → GitHub release 的链路直接 403（curl 就不会）
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=180) as r, open(dest, "wb") as f:
                 shutil.copyfileobj(r, f)
             print(f"  已保存 {os.path.getsize(dest) / 1048576:.1f} MB", flush=True)
             return

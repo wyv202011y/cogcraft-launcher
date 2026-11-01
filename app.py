@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -84,7 +85,33 @@ DEFAULT_SETTINGS = {
     "auto_join": True,
     "prefer_zgc": False,
     "onboarded": False,       # 首次引导是否走完
+    "server_address": "",     # "" = 自动（内网可达用内网，否则用清单里的公网地址）
 }
+
+# 探活结果按地址缓存，避免每次 state() 都白等超时
+_PROBE_CACHE: dict[str, tuple[float, bool]] = {}
+_PROBE_TTL = 60.0
+
+
+def probe_addr(addr: str, timeout: float = 1.2) -> bool:
+    """TCP 探一下 host:port 通不通。内网/公网二选一时用，纯读取，不改任何状态。"""
+    if not addr:
+        return False
+    now = time.time()
+    hit = _PROBE_CACHE.get(addr)
+    if hit and now - hit[0] < _PROBE_TTL:
+        return hit[1]
+    host, sep, port = addr.rpartition(":")
+    if not sep:
+        host, port = addr, "25565"
+    ok = False
+    try:
+        with socket.create_connection((host, int(port)), timeout=timeout):
+            ok = True
+    except Exception:
+        ok = False
+    _PROBE_CACHE[addr] = (now, ok)
+    return ok
 
 
 def load_settings() -> dict:
@@ -237,7 +264,7 @@ class Api:
                 "files": len(plan.get("download") or []),
                 "bytes": plan.get("bytes_needed", 0),
             },
-            "server": (mf.get("server") or {}),
+            "server": self.server_choice(),
             "manifest_error": self.manifest_error,
             "offline": bool(mf.get("_offline")),
             "java": {"path": java, "bundled": using_bundled},
@@ -309,6 +336,36 @@ class Api:
 
     def set_auto_join(self, on: bool) -> dict:
         self.settings["auto_join"] = bool(on)
+        save_settings(self.settings)
+        return self.state()
+
+    def server_choice(self) -> dict:
+        """这次到底连哪个地址。
+
+        优先级：设置里手填的 > 清单的 address_lan（探活通了才用）> 清单的 address。
+
+        为什么要内网这一层：家里内网连自己的公网域名走 hairpin NAT 是**不通**的
+        （实测内网 telnet cogcraft.top:25565 直接失败），而内网地址直连是通的，
+        所以本地测试必须能落到内网地址上。做成自动判定而不是让用户每次手改，
+        外地玩家探内网 1.2 秒不通就回落公网，无感。
+        """
+        srv = dict(self.manifest.get("server") or {})
+        pub = srv.get("address") or ""
+        lan = srv.get("address_lan") or ""
+        manual = (self.settings.get("server_address") or "").strip()
+        if manual:
+            return {**srv, "address": manual, "address_public": pub,
+                    "address_lan": lan, "source": "manual"}
+        if lan and lan != pub and probe_addr(lan):
+            return {**srv, "address": lan, "address_public": pub,
+                    "address_lan": lan, "source": "lan"}
+        return {**srv, "address": pub, "address_public": pub,
+                "address_lan": lan, "source": "public"}
+
+    def set_server_address(self, addr: str) -> dict:
+        """手填服务器地址；传空串表示回到自动（内网优先）。"""
+        self.settings["server_address"] = (addr or "").strip()
+        _PROBE_CACHE.pop(self.settings["server_address"], None)
         save_settings(self.settings)
         return self.state()
 
@@ -400,7 +457,7 @@ class Api:
                                 self.settings.get("memory_mb"),
                                 bool(self.settings.get("prefer_zgc")))
 
-        srv = self.manifest.get("server") or {}
+        srv = self.server_choice()
         addr = srv.get("address") if (srv.get("auto_join") and
                                       self.settings.get("auto_join", True)) else ""
 

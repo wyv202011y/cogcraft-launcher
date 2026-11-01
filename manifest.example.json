@@ -6,13 +6,11 @@
   "channel": "stable",
   "updated": "2026-10-25T08:00:00+08:00",
   "notice": "",
-
   "minecraft": {
     "version": "1.21.1",
     "type": "release",
     "_说明": "从 BMCLAPI 拉 version json / client.jar / libraries / assets"
   },
-
   "modloader": {
     "type": "neoforge",
     "version": "21.1.264",
@@ -20,21 +18,19 @@
     "installer_sha1": "",
     "_说明": "安装器由启动器下载后自动改写内部 URL 指向 BMCLAPI（自带 --mirror 实测无效）"
   },
-
   "server": {
     "name": "像素工坊",
     "address": "cogcraft.top:25565",
+    "address_lan": "192.168.3.40:25565",
     "auto_join": true,
-    "_说明": "auto_join=true 时用 --quickPlayMultiplayer 直接进服，玩家看不到主菜单"
+    "_说明": "auto_join=true 时用 --quickPlayMultiplayer 直接进服；address_lan 是内网地址，客户端探活通了优先用它（本地测试），不通回落 address"
   },
-
   "jvm": {
     "extra_args": [
       "-Djava.net.preferIPv4Stack=true"
     ],
     "_说明": "preferIPv4Stack 必须保留：cdn.modrinth.com 的 DNS 只返回 IPv6，玩家机器没有 IPv6 时会卡 40 秒。内存大小由启动器按硬件自动算，不在这里写死"
   },
-
   "variants": [
     {
       "id": "full",
@@ -118,7 +114,6 @@
       "_说明": "流畅版是高配版的真子集（实测 120 vs 138，没有多出任何文件），切换时按 delete 列表移除差异模组"
     }
   ],
-
   "binding": {
     "enabled": true,
     "api": "https://www.cogcraft.top/client/bind",

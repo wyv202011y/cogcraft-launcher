@@ -298,6 +298,9 @@ def build(args) -> dict:
         "server": {
             "name": args.server_name,
             "address": args.server_addr,
+            # 内网地址：本地/局域网测试用。家里内网连公网域名走 hairpin NAT 不通，
+            # 客户端会先探这个地址，通了就用它，不通（外地玩家）自动回落 address。
+            "address_lan": args.server_addr_lan,
             "auto_join": True,
         },
         "jvm": {"extra_args": ["-Djava.net.preferIPv4Stack=true"]},
@@ -348,6 +351,8 @@ def main():
     ap.add_argument("--neoforge", default="21.1.264")
     ap.add_argument("--server-name", default="像素工坊")
     ap.add_argument("--server-addr", default="cogcraft.top:25565")
+    ap.add_argument("--server-addr-lan", default="192.168.3.40:25565",
+                    help="内网地址，客户端探活通了才用；没有就留空")
     args = ap.parse_args()
 
     print("[3/4] 组装清单…", file=sys.stderr)

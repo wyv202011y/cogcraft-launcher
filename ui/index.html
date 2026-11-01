@@ -324,6 +324,12 @@ input[type=text]:focus{ border-color:#2f4a7a; }
             <div class="right"><div class="seg" id="autoJoinSeg">
               <button data-v="1">开启</button><button data-v="0">关闭</button></div></div>
           </div>
+          <div class="row" style="padding-top:12px">
+            <div><div class="nm">服务器地址</div>
+              <div class="ds" id="srvHint">留空 = 自动</div></div>
+            <div class="right"><input type="text" id="srvAddr" placeholder="自动"
+              style="width:158px;text-align:right;font-size:12px"></div>
+          </div>
         </div>
         <div class="card">
           <div class="lab" style="margin-bottom:8px">Java 运行时</div>
@@ -354,29 +360,43 @@ input[type=text]:focus{ border-color:#2f4a7a; }
 // 界面数据全是假的」。这里改成惰性代理 + 显式等待。
 let REAL_API = null;
 const MOCK_API = (location.search.indexOf('mock=1') >= 0) ? mockApi() : null;
+
+// ⚠️ pywebview 是**分两步**注入的（看 webview/util.py 的 inject_pywebview）：
+//   第一步 run_js(api.js) 建出 window.pywebview = { api: {} } —— 方法还是空的；
+//   第二步 run_js(finish.js) 调 _createApi() 挂上全部方法，随后才派发 pywebviewready。
+// 所以「window.pywebview 存在」≠「方法可用」。必须等到**具体那个方法**是函数为止，
+// 否则 macOS 上会在两步之间抢跑，报「后端桥接未就绪：bootstrap」。
+function refreshApi(){
+  if (window.pywebview && window.pywebview.api){ REAL_API = window.pywebview.api; return REAL_API; }
+  return null;
+}
+function hasMethod(name){
+  const a = refreshApi();
+  return !!(a && typeof a[name] === 'function');
+}
+async function waitMethod(name, ms){
+  const t0 = Date.now();
+  while (true){
+    if (hasMethod(name)) return true;
+    if (Date.now() - t0 > (ms || 20000)) return false;
+    await new Promise(r => setTimeout(r, 100));
+  }
+}
 const api = new Proxy({}, {
   get(_t, name){
-    const src = REAL_API || MOCK_API;
-    if (src && typeof src[name] === 'function') return src[name].bind(src);
-    return async () => { throw new Error('后端桥接未就绪：' + String(name)); };
+    return async function(...args){
+      if (!hasMethod(name)){
+        // 桥还没挂上这个方法（或是在浏览器里直接打开页面）
+        const ok = await waitMethod(name, MOCK_API ? 0 : 20000);
+        if (!ok){
+          if (MOCK_API && typeof MOCK_API[name] === 'function') return MOCK_API[name](...args);
+          throw new Error('启动器后端没就绪（' + String(name) + ' 不可用），请重启应用');
+        }
+      }
+      return REAL_API[name](...args);
+    };
   }
 });
-function bridgeUp(){ return !!(window.pywebview && window.pywebview.api); }
-function waitBridge(ms){
-  if (bridgeUp()){ REAL_API = window.pywebview.api; return Promise.resolve(true); }
-  return new Promise(function(res){
-    let done = false;
-    const finish = (v) => { if (!done){ done = true; res(v); } };
-    window.addEventListener('pywebviewready', function(){
-      if (bridgeUp()){ REAL_API = window.pywebview.api; finish(true); }
-    });
-    const t0 = Date.now();
-    const iv = setInterval(function(){
-      if (bridgeUp()){ REAL_API = window.pywebview.api; clearInterval(iv); finish(true); }
-      else if (Date.now() - t0 > (ms || 15000)){ clearInterval(iv); finish(false); }
-    }, 120);
-  });
-}
 
 let S = null;          // 后端 state
 let busy = false;
@@ -612,6 +632,24 @@ function render(st){
   });
 
   $('playerName').value = (st.settings || {}).player_name || '';
+  // 服务器地址：留空 = 自动（内网可达走内网，否则公网）
+  // 注意变量名别用 srv —— render() 里后面已经有一个 const srv，重名会让整个脚本语法失败
+  const srvInfo = st.server || {};
+  const srvInput = $('srvAddr');
+  srvInput.value = (st.settings || {}).server_address || '';
+  srvInput.placeholder = srvInfo.address_public || '自动';
+  const srcMap = { manual: '手动指定', lan: '内网直连', 'public': '公网' };
+  const srcTxt = srcMap[srvInfo.source] || '';
+  $('srvHint').textContent = (st.settings || {}).server_address
+    ? '手动：' + (srvInfo.address || '—')
+    : ((srvInfo.source === 'lan')
+        ? '自动 · 内网 ' + srvInfo.address + '（公网域名在内网连不上）'
+        : '留空 = 自动 · 当前 ' + (srvInfo.address || '—') + (srcTxt ? '（' + srcTxt + '）' : ''));
+  srvInput.onchange = async () => {
+    const st2 = await api.set_server_address(srvInput.value.trim());
+    render(st2);
+  };
+
   const aj = (st.settings || {}).auto_join !== false;
   [].forEach.call($('autoJoinSeg').children, b => {
     b.classList.toggle('on', (b.dataset.v === '1') === aj);
@@ -900,8 +938,8 @@ async function startInstall(){
 // ═══ 启动 ═══
 (async function init(){
   try {
-    // 先等后端桥接就绪（macOS 上桥是页面加载后才注入的）
-    const bridged = await waitBridge(15000);
+    // 先等后端桥接把方法挂上（macOS 上桥分两步注入，只等对象存在不够）
+    const bridged = await waitMethod('bootstrap', 20000);
     if (!bridged && !MOCK_API) {
       $('pText').textContent = '启动器后端没有响应（桥接未就绪），请重启应用';
       setBar('error');
@@ -940,6 +978,7 @@ function realApi(HWD){
     set_memory: async (m) => { if (HWD.memory) HWD.memory.xmx_mb = m; return clone(HWD); },
     set_player: async () => clone(HWD),
     set_auto_join: async () => clone(HWD),
+    set_server_address: async () => clone(HWD),
     reset_settings: async () => clone(HWD),
     finish_onboard: async () => { (HWD.settings = HWD.settings || {}).onboarded = true;
                                   return clone(HWD); },
@@ -991,6 +1030,7 @@ function mockApi(){
     set_memory: async (m) => { HWD.memory.xmx_mb = m; return clone(HWD); },
     set_player: async () => clone(HWD),
     set_auto_join: async () => clone(HWD),
+    set_server_address: async () => clone(HWD),
     reset_settings: async () => clone(HWD),
     finish_onboard: async () => { HWD.settings.onboarded = true; return clone(HWD); },
     benchmark: async () => clone(HWD.bench || {ok:false}),

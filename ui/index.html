@@ -959,9 +959,12 @@ async function startInstall(){
     // 后台跑性能实测：用户看第 1 页的时间就够它跑完，体感零等待
     if (!(st.bench && st.bench.ok)) runBench();
   } catch (e) {
-    $('pText').textContent = '启动器初始化失败：' + e;
+    const emsg = (e && (e.message || e.name)) ? (e.message || e.name) : String(e);
+    $('pText').textContent = '启动器初始化失败：' + emsg;
     $('btnMain').textContent = '重试';
     $('btnMain').disabled = false;
+    // 错误落盘到后端 launcher.log —— 用户机器上没有控制台，日志是唯一排障入口
+    try { api.client_error('bootstrap 失败: ' + emsg + '\n' + ((e && e.stack) || '')); } catch (_) {}
   }
 })();
 
@@ -979,6 +982,7 @@ function realApi(HWD){
     set_player: async () => clone(HWD),
     set_auto_join: async () => clone(HWD),
     set_server_address: async () => clone(HWD),
+    client_error: async () => ({ok:true}),
     reset_settings: async () => clone(HWD),
     finish_onboard: async () => { (HWD.settings = HWD.settings || {}).onboarded = true;
                                   return clone(HWD); },
@@ -1031,6 +1035,7 @@ function mockApi(){
     set_player: async () => clone(HWD),
     set_auto_join: async () => clone(HWD),
     set_server_address: async () => clone(HWD),
+    client_error: async () => ({ok:true}),
     reset_settings: async () => clone(HWD),
     finish_onboard: async () => { HWD.settings.onboarded = true; return clone(HWD); },
     benchmark: async () => clone(HWD.bench || {ok:false}),

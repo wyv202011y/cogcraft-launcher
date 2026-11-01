@@ -253,7 +253,7 @@ class Api:
 
         return {
             "hardware": self.hw,
-            "hardware_text": jvm_mod.describe(hw) if hw else "",
+            "hardware_text": self._describe_safe(hw),
             "variants": variants,
             "variant": variant_id,
             "variant_auto": auto_variant,
@@ -272,6 +272,27 @@ class Api:
             "modloader": (mf.get("modloader") or {}),
             "minecraft": (mf.get("minecraft") or {}),
         }
+
+    def _describe_safe(self, hw: dict) -> str:
+        """硬件摘要绝不允许抛异常 —— 它崩了整个 bootstrap 就跟着崩。
+
+        macOS 上就踩过：avail_mb 是 None，describe() 里 None // 1024 抛
+        TypeError，界面直接停在「初始化失败」，一个纯展示字段毁掉整个启动。
+        """
+        if not hw:
+            return ""
+        try:
+            return jvm_mod.describe(hw)
+        except Exception:
+            self._log("describe() 失败，已降级：\n" + traceback.format_exc())
+            cpu = (hw.get("cpu") or {}).get("name") or "未知"
+            total = (hw.get("ram") or {}).get("total_mb")
+            return f"CPU  {cpu}\n内存 {total // 1024 if total else '?'} GB"
+
+    def client_error(self, msg: str) -> dict:
+        """界面侧捕获到的错误写到 launcher.log —— 用户机器上没有控制台。"""
+        self._log("[UI] " + str(msg)[:2000])
+        return {"ok": True}
 
     # ── 设置修改 ──
     def benchmark(self, force: bool = False) -> dict:

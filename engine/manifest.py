@@ -23,14 +23,13 @@ class ManifestError(Exception):
 
 def fetch(url: str, timeout: float = 15.0, cache_dir: str | None = None) -> dict:
     """下载清单。网络失败时若有本地缓存则降级使用（离线也能进游戏）。"""
-    import requests
-
     err = None
     try:
-        r = requests.get(url, timeout=timeout,
-                         headers={"User-Agent": "cogcraft-launcher/1.0"})
-        r.raise_for_status()
-        data = r.json()
+        # 走 net.py，不引入 requests：整个启动器只留一套网络栈。
+        # 之前清单用 requests（自带 certifi 根证书）、下载用 urllib（系统根证书），
+        # macOS 上就是两条链信任锚不同 —— 清单能拉、下载全崩，还多背一个依赖。
+        import net
+        data = json.loads(net.get_bytes(url, timeout=timeout).decode("utf-8"))
         if cache_dir:
             os.makedirs(cache_dir, exist_ok=True)
             with open(os.path.join(cache_dir, "manifest.cache.json"), "w",

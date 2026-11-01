@@ -33,7 +33,10 @@ def main() -> None:
     jre_platform = {"darwin": "mac", "win32": "windows"}.get(sys.platform, "linux")
     jre_arch = "aarch64" if arch == "arm64" else "x64"
 
-    run([sys.executable, "-m", "pip", "install", "--upgrade", "pip", "pywebview", "pyinstaller"])
+    # certifi 必须显式装：--collect-data certifi 找不到包会让打包直接失败，
+    # 而且下载用的根证书就来自它的 cacert.pem。
+    run([sys.executable, "-m", "pip", "install", "--upgrade", "pip",
+         "pywebview", "pyinstaller", "certifi"])
     run([sys.executable, os.path.join("ci", "prepare_jre.py"), jre_platform, jre_arch])
 
     args = [

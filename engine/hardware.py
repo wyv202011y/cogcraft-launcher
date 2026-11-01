@@ -14,6 +14,7 @@ import ctypes
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -81,14 +82,47 @@ def total_memory_mb() -> tuple[int | None, int | None]:
 
     # macOS
     if sys.platform == "darwin":
+        total = None
+        avail = None
         try:
-            total = int(_run(["sysctl", "-n", "hw.memsize"]).strip() or 0) // 1048576
-            vm = _run(["vm_stat"])
-            return (total or None, None)
+            total = int(_run(["sysctl", "-n", "hw.memsize"]).strip() or 0) // 1048576 or None
         except Exception:
-            pass
+            total = None
+        try:
+            avail = _parse_vm_stat(_run(["vm_stat"]))
+        except Exception:
+            avail = None
+        return (total, avail)
 
     return (None, None)
+
+
+def _parse_vm_stat(text: str) -> int | None:
+    """从 macOS 的 vm_stat 输出算可用内存（MB）。
+
+    以前这里直接 `return (total, None)` —— 可用内存永远是 None，下游
+    `ram['avail_mb'] // 1024` 就崩成 `TypeError: unsupported operand type(s)
+    for //: 'NoneType' and 'int'`，整个界面卡在“初始化失败”。
+    可用 = free + inactive + speculative（macOS 上 inactive 会被回收，
+    等同于「现在能拿来用的」）。页大小从表头读：Apple Silicon 是 16384，
+    Intel Mac 是 4096，**不能写死 4096**。
+    """
+    if not text:
+        return None
+    page = 4096
+    m = re.search(r"page size of (\d+) bytes", text)
+    if m:
+        page = int(m.group(1))
+    kv: dict[str, int] = {}
+    for line in text.splitlines():
+        mm = re.match(r"\s*([A-Za-z][A-Za-z \-]+):\s+(\d+)", line)
+        if mm:
+            kv[mm.group(1).strip().lower()] = int(mm.group(2))
+    pages = (kv.get("pages free", 0) + kv.get("pages inactive", 0)
+             + kv.get("pages speculative", 0))
+    if not pages:
+        return None
+    return int(pages * page // 1048576) or None
 
 
 def _win_system_info() -> dict:

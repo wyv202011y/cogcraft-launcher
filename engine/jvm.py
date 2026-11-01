@@ -261,11 +261,15 @@ def describe(hw: dict) -> str:
     if vram:
         gpu_s += f" ({vram} MB)"
     total = ram.get("total_mb")
+    avail = ram.get("avail_mb") or 0
+    # 可用内存读不到时不能直接整除 —— macOS 旧代码返回 None 就是这里崩的
+    mem_s = f"内存 {total // 1024 if total else '?'} GB"
+    if avail:
+        mem_s += f"（可用 {avail // 1024} GB）"
     return (
         f"CPU  {cpu.get('name', '未知')}"
         f"（{cpu.get('threads') or '?'} 线程）\n"
-        f"内存 {total // 1024 if total else '?'} GB"
-        f"（可用 {ram.get('avail_mb', 0) // 1024} GB）\n"
+        f"{mem_s}\n"
         f"显卡 {gpu_s}\n"
         f"磁盘 {hw.get('disk', {}).get('type', '未知')}"
     )

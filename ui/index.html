@@ -883,7 +883,12 @@ function renderWizard(){
           (pend.files || 0) + ' 个文件 <em>' + fmtBytes(pend.bytes || 0) + '</em></span></div>' +
         '<div class="rw"><span class="k">安装到</span><span class="v mono" ' +
           'style="font-size:11px;color:#79828f">' +
-          (((st.settings || {}).game_dir) || '—') + '</span></div>' +
+          (((st.settings || {}).game_dir) || '—') +
+          (st.data_in_app
+            ? '<br><em style="font-size:10.5px;color:#4a5260">都在 cogcraft.app 内部，' +
+              '删掉 app 会一起清空</em>'
+            : '') +
+          '</span></div>' +
       '</div>' +
       '<div class="wsub" style="margin-top:18px;font-size:11.5px;color:#4a5260">' +
         '点「开始安装」后就可以去干别的了，装完会自动进游戏。</div>';

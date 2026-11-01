@@ -10,3 +10,4 @@ ui/dev-state.json
 runtime/
 jre/
 .DS_Store
+data/

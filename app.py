@@ -37,7 +37,11 @@ MANIFEST_FALLBACK = os.path.join(_HERE, "manifest.example.json")
 
 # ────────────────────────── 路径 ──────────────────────────
 
-def appdata_dir() -> str:
+def userdata_dir() -> str:
+    """用户目录下的数据位置（老位置，macOS 上是 ~/Library/Application Support/cogcraft）。
+
+    保留它只为了①降级兜底②把老数据搬进 .app 时找得到源头。
+    """
     if sys.platform == "win32":
         base = os.environ.get("APPDATA") or os.path.expanduser("~")
     elif sys.platform == "darwin":
@@ -45,6 +49,97 @@ def appdata_dir() -> str:
     else:
         base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
     return os.path.join(base, APP_NAME)
+
+
+def bundle_data_dir() -> str | None:
+    """macOS：数据放进 .app 自己里面，访达里把 app 拖进废纸篓就一并清干净。
+
+    这是 App Store 应用的默认心算模型（一个 app = 一个可整体丢弃的包），
+    而 ~/Library/Application Support/<app> 删了 app 之后会永久留在盘上。
+    只有冻结后的 macOS 包才这么做：
+      · Windows 玩家没有「拖到回收站卸载」的直觉，维持 %APPDATA%
+      · 源码运行时 _HERE 是仓库目录，往那儿写数据会污染工作区
+    """
+    if sys.platform != "darwin" or not getattr(sys, "frozen", False):
+        return None
+    return os.path.join(_HERE, "data")
+
+
+def _writable(p: str) -> bool:
+    """真写一个探针文件再删掉 —— os.access 在只读挂载/沙箱下会骗人。"""
+    try:
+        os.makedirs(p, exist_ok=True)
+        probe = os.path.join(p, ".write_probe")
+        with open(probe, "w") as f:
+            f.write("1")
+        os.remove(probe)
+        return True
+    except Exception:
+        return False
+
+
+_DATA_DIR: str | None = None
+
+
+def appdata_dir() -> str:
+    """数据目录：优先 .app 内部；不可写就回落用户目录。
+
+    不可写的真实场景：① 首次打开被 Gatekeeper 转译（App Translocation）到
+    只读的随机路径 ② app 装在 /Applications 但当前用户不是拥有者。
+    这两种情况都必须能继续用，不能因为「想放 app 里」就把启动器整个搞挂。
+    """
+    global _DATA_DIR
+    if _DATA_DIR:
+        return _DATA_DIR
+    # 排障/测试用：COGCRAFT_DATA_DIR 强制指定数据目录
+    forced = os.environ.get("COGCRAFT_DATA_DIR", "").strip()
+    if forced:
+        _DATA_DIR = forced
+        return _DATA_DIR
+    cand = bundle_data_dir()
+    if cand and _writable(cand):
+        _DATA_DIR = cand
+    else:
+        _DATA_DIR = userdata_dir()
+    return _DATA_DIR
+
+
+def in_bundle() -> bool:
+    """当前数据是否真的落在 .app 内部（界面据此显示「删掉即清空」提示）。"""
+    d = bundle_data_dir()
+    return bool(d) and os.path.abspath(appdata_dir()) == os.path.abspath(d)
+
+
+def migrate_legacy_data() -> dict:
+    """把老位置（用户目录）的数据搬进 .app，只做一次，失败不影响启动。
+
+    搬的是 settings.json + client/（游戏文件）。日志与清单缓存不搬 —— 留着无害，
+    而且清单缓存下次自动重建。
+    """
+    new, old = appdata_dir(), userdata_dir()
+    if os.path.abspath(new) == os.path.abspath(old) or not os.path.isdir(old):
+        return {"状态": "无需迁移"}
+
+    import shutil
+    report: dict = {}
+    # 1) 设置（迁过来才有引导完成状态、服务器地址这些）
+    o_st, n_st = os.path.join(old, "settings.json"), os.path.join(new, "settings.json")
+    if os.path.exists(o_st) and not os.path.exists(n_st):
+        try:
+            shutil.copy2(o_st, n_st)
+            report["设置"] = "已迁入"
+        except Exception as e:
+            report["设置"] = f"失败({e})"
+
+    # 2) 游戏文件（同卷时是一次 rename，几乎零耗时）
+    o_c, n_c = os.path.join(old, "client"), os.path.join(new, "client")
+    if os.path.isdir(o_c) and not os.path.exists(n_c):
+        try:
+            shutil.move(o_c, n_c)
+            report["游戏文件"] = "已迁入"
+        except Exception as e:
+            report["游戏文件"] = f"失败({e})"
+    return report
 
 
 def bundled_java() -> str | None:
@@ -139,8 +234,16 @@ def load_settings() -> dict:
                 st.update(json.load(f) or {})
         except Exception:
             pass
-    if not st.get("game_dir"):
-        st["game_dir"] = os.path.join(appdata_dir(), "client")
+    legacy_default = os.path.join(userdata_dir(), "client")
+    new_default = os.path.join(appdata_dir(), "client")
+    cur = st.get("game_dir")
+    if not cur:
+        st["game_dir"] = new_default
+    elif (new_default != legacy_default
+          and os.path.abspath(cur) == os.path.abspath(legacy_default)
+          and not os.path.isdir(legacy_default)):
+        # 老目录已经成功搬进 .app 了，持久化的旧路径要跟着改，否则下次还指回老地方
+        st["game_dir"] = new_default
     if not st.get("player_name"):
         st["player_name"] = os.environ.get("USERNAME") or os.environ.get("USER") or "Player"
     return st
@@ -285,6 +388,9 @@ class Api:
             "offline": bool(mf.get("_offline")),
             "java": {"path": java, "bundled": using_bundled},
             "settings": self.settings,
+            # 数据是否在 .app 里：界面据此告诉用户「删掉 app 就清空」
+            "data_dir": appdata_dir(),
+            "data_in_app": in_bundle(),
             "modloader": (mf.get("modloader") or {}),
             "minecraft": (mf.get("minecraft") or {}),
         }
@@ -548,7 +654,11 @@ def main():
         print("缺少 pywebview，开发环境请先 pip install pywebview", file=sys.stderr)
         raise
 
+    # 老版本把数据放在用户目录，新版本搬进 .app：只做一次，失败也只是继续用老位置
+    mig = migrate_legacy_data()
     api = Api()
+    if mig:
+        api._log(f"[migrate] {mig} → 数据目录 {appdata_dir()}")
     ui = os.path.join(_HERE, "ui", "index.html")
     win = webview.create_window(
         "cogcraft", f"file://{ui}",

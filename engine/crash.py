@@ -230,7 +230,12 @@ def upload(report: dict, endpoint: str, timeout: float = 15.0) -> dict:
     req.add_header("Content-Type", "application/json; charset=utf-8")
     req.add_header("User-Agent", "cogcraft-launcher/" + report["launcher_ver"])
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        try:
+            import net as _n
+            _ctx = _n._tls_ctx()
+        except Exception:
+            _ctx = None
+        with urllib.request.urlopen(req, timeout=timeout, context=_ctx) as r:
             body = r.read().decode("utf-8", "replace")
         d = json.loads(body)
         return {"ok": bool(d.get("success")), "id": d.get("id"),

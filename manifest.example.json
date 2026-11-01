@@ -15,7 +15,7 @@
     "type": "neoforge",
     "version": "21.1.264",
     "installer_url": "https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/21.1.264/neoforge-21.1.264-installer.jar",
-    "installer_sha1": "",
+    "installer_sha1": "f801601bafa7f5957295353930e2cb61dcfddc6c",
     "_说明": "安装器由启动器下载后自动改写内部 URL 指向 BMCLAPI（自带 --mirror 实测无效）"
   },
   "server": {

@@ -59,21 +59,23 @@ class PipelineError(Exception):
 
 
 def _download(url: str, dest: str, timeout: float = 120.0, retries: int = 3,
-              allow_empty: bool = False) -> int:
+              allow_empty: bool = False, insecure: bool = False) -> int:
     """下载到 dest。实现收敛在 net.py（IPv4 优先 + 原子写 + 退避重试）。"""
     import net
     return net.download_to(url, dest, timeout=timeout, retries=retries,
-                           allow_empty=allow_empty)
+                           allow_empty=allow_empty, insecure=insecure)
 
 
 class Pipeline:
     def __init__(self, game_dir: str, mf: dict, variant_id: str | None,
-                 java_exe: str, progress=None):
+                 java_exe: str, progress=None, log=None):
         self.game_dir = game_dir
         self.mf = mf
         self.variant = manifest_mod.pick_variant(mf, variant_id)
         self.java_exe = java_exe
         self.progress = progress or (lambda *a, **k: None)
+        # 日志回调：冻结包没有控制台，装不上时全靠 launcher.log 排障
+        self.log = log or (lambda _m: None)
         self.mc_version = mf["minecraft"]["version"]
         self.loader_type = mf["modloader"].get("type", "neoforge")
         self.loader_version = mf["modloader"]["version"]
@@ -91,6 +93,64 @@ class Pipeline:
     def _check_cancel(self):
         if self._cancel.is_set():
             raise PipelineError("已取消")
+
+    # ────────── 安装器下载（多源 + 内容哈希） ──────────
+
+    def _installer_sources(self) -> list[str]:
+        """安装器候选源，按优先级排。
+
+        国内三种网络环境都会踩：① 系统根证书缺失（macOS 冻结包）
+        ② 运营商插自签证书劫持 ③ 镜像站自己证书链不完整。所以不能只写死一个源。
+        """
+        mf = self.mf.get("modloader") or {}
+        v = self.loader_version
+        cands = [
+            (mf.get("installer_url") or "").strip(),
+            f"{BMCLAPI}/neoforge/version/{v}/installer",
+            f"https://maven.neoforged.net/releases/net/neoforged/neoforge/{v}"
+            f"/neoforge-{v}-installer.jar",
+        ]
+        seen, out = set(), []
+        for u in cands:
+            if u and u not in seen:
+                seen.add(u)
+                out.append(u)
+        return out
+
+    def _fetch_installer(self, dest: str) -> str:
+        """下载 NeoForge 安装器：多源轮换 + 按清单 sha1 钉死内容。
+
+        TLS 校验失败时允许降级 skip-verify，但**前提是清单里有 installer_sha1**
+        —— 内容的正确性由哈希保证，不再依赖那条走不通的证书链。
+        没有哈希就绝不降级，宁可报错。
+        """
+        import net
+        want = str((self.mf.get("modloader") or {}).get("installer_sha1") or "").strip().lower()
+        errs: list[str] = []
+        for url in self._installer_sources():
+            host = url.split("/")[2] if "//" in url else url
+            # 有哈希才允许「降级跳过证书校验」这一档
+            modes = [(False, 3)] + ([(True, 1)] if want else [])
+            for insecure, tries in modes:
+                tag = host + ("（跳过证书校验，靠 sha1 兜底）" if insecure else "")
+                try:
+                    self._emit(Step.LOADER, 0.02, f"获取安装器… {host}")
+                    _download(url, dest, insecure=insecure, retries=tries)
+                    if want:
+                        got = net.sha1_of_file(dest)
+                        if got != want:
+                            try:
+                                os.remove(dest)
+                            except Exception:
+                                pass
+                            raise IOError(f"sha1 不匹配（清单 {want[:12]}… 实得 {got[:12]}…）")
+                    self.log(f"[installer] 成功 {url} insecure={insecure} "
+                             f"size={os.path.getsize(dest) if os.path.exists(dest) else 0}")
+                    return url
+                except Exception as e:
+                    errs.append(f"{tag}: {type(e).__name__}: {e}")
+                    self.log("[installer] 失败 " + errs[-1])
+        raise PipelineError("拿不到 NeoForge 安装器（所有源都失败）：\n  " + "\n  ".join(errs))
 
     # ────────── 1. 磁盘 ──────────
 
@@ -127,10 +187,8 @@ class Pipeline:
         raw = os.path.join(cache, f"{self.loader_id}-installer.jar")
         patched = os.path.join(cache, f"{self.loader_id}-installer-cn.jar")
 
-        url = (self.mf["modloader"].get("installer_url")
-               or f"{BMCLAPI}/neoforge/version/{self.loader_version}/installer")
         if not os.path.exists(raw):
-            _download(url, raw)
+            self._fetch_installer(raw)
         self._check_cancel()
 
         self._emit(Step.LOADER, 0.15, "改写下载源…")
@@ -153,6 +211,9 @@ class Pipeline:
         if sys.platform == "win32":
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        self.log("[loader] 执行 " + " ".join(cmd))
+        if not os.path.exists(self.java_exe):
+            raise PipelineError(f"找不到 Java：{self.java_exe}")
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                 text=True, encoding="utf-8", errors="replace",
                                 startupinfo=si)
@@ -165,6 +226,7 @@ class Pipeline:
                        line.strip()[:80] or "安装中…")
         code = proc.wait()
         if code != 0 or not self._loader_installed():
+            self.log("[loader] 失败输出:\n" + "\n".join(lines[-40:]))
             raise PipelineError(
                 "模组加载器安装失败（退出码 %s）\n%s" % (code, "\n".join(lines[-15:])))
         self._emit(Step.LOADER, 1.0, "安装完成")

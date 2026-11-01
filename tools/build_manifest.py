@@ -294,6 +294,10 @@ def build(args) -> dict:
             "version": args.neoforge,
             "installer_url": f"https://bmclapi2.bangbang93.com/maven/net/neoforged/"
                              f"neoforge/{args.neoforge}/neoforge-{args.neoforge}-installer.jar",
+            # 安装器内容的 sha1：下载端据此判定「拿到的对不对」。
+            # 有了它，TLS 校验失败时可以降级 skip-verify 而不损失安全性
+            # （见 engine/pipeline.py 的 _fetch_installer）。
+            "installer_sha1": getattr(args, "installer_sha1", "") or "",
         },
         "server": {
             "name": args.server_name,
@@ -349,6 +353,8 @@ def main():
                          "主地址失败时客户端自动回退，只在这时才消耗我们带宽")
     ap.add_argument("--mc-version", default="1.21.1")
     ap.add_argument("--neoforge", default="21.1.264")
+
+    ap.add_argument("--installer-sha1", default="", help="NeoForge 安装器 sha1（内容钉死用）")
     ap.add_argument("--server-name", default="像素工坊")
     ap.add_argument("--server-addr", default="cogcraft.top:25565")
     ap.add_argument("--server-addr-lan", default="192.168.3.40:25565",

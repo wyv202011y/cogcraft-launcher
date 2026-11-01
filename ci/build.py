@@ -45,6 +45,9 @@ def main() -> None:
         "--add-data", f"engine{SEP}engine",
         "--add-data", f"runtime{SEP}runtime",
         "--add-data", f"manifest.example.json{SEP}.",
+        # 下载走 urllib，根证书必须和 requests 同源（certifi 的 cacert.pem）。
+        # 不显式收进来，macOS 冻结包里就没有可信根证书，HTTPS 下载全崩。
+        "--collect-data", "certifi",
     ]
     # 各平台的 pywebview 后端不一样，只隐藏导入对应的那个
     if sys.platform == "darwin":

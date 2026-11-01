@@ -58,8 +58,24 @@ def bundled_java() -> str | None:
     return None
 
 
+def _ensure_exec(path: str) -> None:
+    """补回可执行位（只动随包内置的 runtime）。
+
+    macOS 上从 zip/隔空投送过来的 .app 偶尔会丢可执行位，
+    表现是 java 存在但一跑就 Permission denied，报错还很难看懂。
+    """
+    if sys.platform == "win32" or not path:
+        return
+    try:
+        if not os.access(path, os.X_OK):
+            os.chmod(path, os.stat(path).st_mode | 0o111)
+    except Exception:
+        pass
+
+
 def find_java(settings: dict) -> str:
     """按优先级找 Java：用户指定 → 随包内置 → JAVA_HOME → PATH。"""
+    _ensure_exec(bundled_java())
     cands = [settings.get("java_path"), bundled_java()]
     jh = os.environ.get("JAVA_HOME", "").strip()
     if jh:   # 空 JAVA_HOME 会拼出 /bin/java 这种假路径，必须先判空
@@ -448,6 +464,7 @@ class Api:
                 progress=lambda step, pct, msg: self.emit(
                     "progress", {"step": step, "pct": pct, "text": msg,
                                  "label": pipeline_mod.STEP_LABELS.get(step, step)}),
+                log=lambda m: self._log(str(m)),
             )
             self.pipeline = pipe
             report = pipe.ensure_all()

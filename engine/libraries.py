@@ -14,7 +14,16 @@ import json, os, sys, time, urllib.request, ssl, concurrent.futures
 
 BMCLAPI = "https://bmclapi2.bangbang93.com"
 UA = "cogcraft-launcher/1.0"
-CTX = ssl.create_default_context()
+def _make_ctx():
+    """根证书必须跟 net.py 一致（certifi），否则 macOS 冻结包里一条都下不动。"""
+    try:
+        import net as _n
+        return _n._tls_ctx()
+    except Exception:
+        return ssl.create_default_context()
+
+
+CTX = _make_ctx()
 
 
 def rewrite_url(url: str) -> list:

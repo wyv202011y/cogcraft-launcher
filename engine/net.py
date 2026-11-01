@@ -30,11 +30,53 @@ import urllib.request
 from urllib.parse import urlsplit
 
 UA = "cogcraft-launcher/1.0"
-_TLS = ssl.create_default_context()
+def _make_tls() -> ssl.SSLContext:
+    """TLS 上下文必须和 requests 用同一套根证书。
+
+    坑（macOS 实测踩中）：清单走 requests（自带 certifi 根证书）拉得好好的，
+    但下载走 urllib + create_default_context()，靠的是**系统**根证书。
+    macOS 上官方 Python 系统根证书路径是空的、冻结包更没有，于是清单能拿到、
+    下载必然 SSL: CERTIFICATE_VERIFY_FAILED —— 界面表现就是「检查磁盘空间 ✅
+    安装模组加载器 ❌ self-signed certificate in certificate chain」。
+
+    修法：先建系统默认上下文，再把 certifi 的 cacert.pem 叠加进去，
+    这样下载和清单的信任锚完全一致。
+    """
+    ctx = ssl.create_default_context()
+    try:
+        import certifi
+        ctx.load_verify_locations(cafile=certifi.where())
+    except Exception:
+        pass
+    return ctx
+
+
+_TLS = _make_tls()
+_INSECURE_TLS = None
 _POOL = threading.local()
 
 
-def _pooled_conn(scheme: str, host: str, port: int, timeout: float):
+def _tls_ctx(insecure: bool = False) -> ssl.SSLContext:
+    """insecure=True 只在「已经用清单里的 sha1 钉死内容」时才允许使用。
+
+    为什么需要它：国内运营商/校园网会插入自签证书做劫持，链验证必然失败。
+    这时候 TLS 挡攻击的价值已经没了，但**内容哈希**还有 —— 只要清单里
+    写了 installer_sha1，拿到的东西对不对能离线判定，比死等一个连不上的
+    官方源强。绝不静默降级：调用方必须先有 hash 才允许传 insecure。
+    """
+    global _INSECURE_TLS
+    if not insecure:
+        return _TLS
+    if _INSECURE_TLS is None:
+        c = ssl.create_default_context()
+        c.check_hostname = False
+        c.verify_mode = ssl.CERT_NONE
+        _INSECURE_TLS = c
+    return _INSECURE_TLS
+
+
+def _pooled_conn(scheme: str, host: str, port: int, timeout: float,
+                 insecure: bool = False):
     """取本线程到该主机的可复用连接。
 
     坑：226 个客户端文件里 212 个是小配置文件，每个几 KB。
@@ -44,11 +86,11 @@ def _pooled_conn(scheme: str, host: str, port: int, timeout: float):
     conns = getattr(_POOL, "conns", None)
     if conns is None:
         conns = _POOL.conns = {}
-    key = (scheme, host, port)
+    key = (scheme, host, port, insecure)
     c = conns.get(key)
     if c is None or getattr(c, "sock", None) is None:
         cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
-        kw = {"context": _TLS} if scheme == "https" else {}
+        kw = {"context": _tls_ctx(insecure)} if scheme == "https" else {}
         c = cls(host, port, timeout=timeout, **kw)
         conns[key] = c
     return c
@@ -56,15 +98,17 @@ def _pooled_conn(scheme: str, host: str, port: int, timeout: float):
 
 def _drop_conn(scheme: str, host: str, port: int) -> None:
     conns = getattr(_POOL, "conns", None) or {}
-    c = conns.pop((scheme, host, port), None)
-    try:
-        if c:
-            c.close()
-    except Exception:
-        pass
+    for k in [k for k in conns if k[:3] == (scheme, host, port)]:
+        c = conns.pop(k, None)
+        try:
+            if c:
+                c.close()
+        except Exception:
+            pass
 
 
-def _http_get_stream(url: str, timeout: float, chunk: int, sink, redirects: int = 4) -> int:
+def _http_get_stream(url: str, timeout: float, chunk: int, sink,
+                     redirects: int = 4, insecure: bool = False) -> int:
     """用可复用连接流式 GET，把数据喂给 sink(bytes)。返回字节数。
 
     只做最朴素的实现：不走代理、不自动解压，够用且可预测。
@@ -78,7 +122,7 @@ def _http_get_stream(url: str, timeout: float, chunk: int, sink, redirects: int 
     if u.query:
         path += "?" + u.query
 
-    conn = _pooled_conn(scheme, host, port, timeout)
+    conn = _pooled_conn(scheme, host, port, timeout, insecure)
     try:
         conn.request("GET", path, headers={
             "User-Agent": UA,
@@ -95,7 +139,8 @@ def _http_get_stream(url: str, timeout: float, chunk: int, sink, redirects: int 
                     loc = scheme + ":" + loc
                 elif loc.startswith("/"):
                     loc = f"{scheme}://{host}{loc}"
-                return _http_get_stream(loc, timeout, chunk, sink, redirects - 1)
+                return _http_get_stream(loc, timeout, chunk, sink,
+                                        redirects - 1, insecure)
         if r.status not in (200, 206):
             body = r.read(512)
             # 连接上的错误响应读完后连接仍可用，但 4xx/5xx 后保险起见丢弃
@@ -171,9 +216,16 @@ def _permanent(err: Exception) -> bool:
     4xx 里除了 408/429 都是「这个文件本来就不该能下」，
     重试三次只会让界面卡住——实测过：URL 层级写错导致 404 时，
     每个文件要磨掉 21 秒才报错。
+
+    证书错误同理：链验证失败重试一百次也是失败，只会白等。
+    macOS 上就是这一条把「换个源」拖成了好几分钟。
     """
     if isinstance(err, urllib.error.HTTPError):
         return err.code not in (408, 429) and 400 <= err.code < 500
+    if isinstance(err, ssl.SSLError):
+        return True
+    if isinstance(err, urllib.error.URLError) and isinstance(getattr(err, "reason", None), ssl.SSLError):
+        return True
     return False
 
 
@@ -213,7 +265,8 @@ def get_bytes(url: str, timeout: float = 30.0, retries: int = 3,
     last: Exception | None = None
     for i in range(retries):
         try:
-            with urllib.request.urlopen(_req(url, timeout), timeout=timeout) as r:
+            with urllib.request.urlopen(_req(url, timeout), timeout=timeout,
+                                       context=_tls_ctx()) as r:
                 if r.status not in ok_codes:
                     raise IOError(f"HTTP {r.status}")
                 return r.read()
@@ -228,11 +281,12 @@ def get_bytes(url: str, timeout: float = 30.0, retries: int = 3,
 
 def download_to(url: str, dest: str, timeout: float = 120.0, retries: int = 3,
                 chunk: int = 1 << 18, on_chunk=None,
-                allow_empty: bool = False) -> int:
+                allow_empty: bool = False, insecure: bool = False) -> int:
     """下载到 dest（原子替换）。返回字节数。
 
     allow_empty: 整合包里确实存在 0 字节文件（如 ModernUI/bootstrap.properties），
     默认把 0 字节当失败会把这类文件误报成下载失败。
+    insecure: 跳过证书链校验（只在调用方持有内容哈希时用，见 _tls_ctx）。
     """
     prefer_ipv4()
     os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
@@ -250,7 +304,8 @@ def download_to(url: str, dest: str, timeout: float = 120.0, retries: int = 3,
                     if on_chunk:
                         on_chunk(len(b))
                 try:
-                    total = _http_get_stream(url, timeout, chunk, sink)
+                    total = _http_get_stream(url, timeout, chunk, sink,
+                                             insecure=insecure)
                 except (http.client.HTTPException, OSError) as e:
                     # 长连接可能已被对端关掉（keep-alive 超时），重试时自然重连
                     if isinstance(e, urllib.error.HTTPError):
@@ -281,13 +336,28 @@ def head_ok(url: str, timeout: float = 20.0) -> tuple[bool, str]:
     """检查 URL 是否可下载（服务器/CDN 支持 HEAD 就用 HEAD，否则退 GET 首字节）。"""
     prefer_ipv4()
     try:
-        with urllib.request.urlopen(_req(url, timeout, "HEAD"), timeout=timeout) as r:
+        with urllib.request.urlopen(_req(url, timeout, "HEAD"), timeout=timeout,
+                                       context=_tls_ctx()) as r:
             return True, f"HTTP {r.status} · {r.headers.get('Content-Length','?')} 字节"
     except Exception as e_head:
         try:
             req = _req(url, timeout)
             req.add_header("Range", "bytes=0-0")
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with urllib.request.urlopen(req, timeout=timeout,
+                                       context=_tls_ctx()) as r:
                 return True, f"HTTP {r.status} · 支持 Range"
         except Exception:
             return False, f"{type(e_head).__name__}: {e_head}"
+
+
+def sha1_of_file(path: str, chunk: int = 1 << 20) -> str:
+    """算文件的 sha1（清单里钉内容用的就是 sha1）。"""
+    import hashlib
+    h = hashlib.sha1()
+    with open(path, "rb") as f:
+        while True:
+            b = f.read(chunk)
+            if not b:
+                break
+            h.update(b)
+    return h.hexdigest()

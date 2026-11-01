@@ -337,6 +337,7 @@ input[type=text]:focus{ border-color:#2f4a7a; }
     </div>
     <div class="pfoot">
       <button class="btn sub" id="btnReset">恢复推荐</button>
+      <button class="btn sub" id="btnOnboard" style="width:96px">重新引导</button>
       <div class="spacer"></div>
       <button class="btn sub" id="btnClosePanel" style="width:110px">关闭</button>
     </div>
@@ -347,7 +348,35 @@ input[type=text]:focus{ border-color:#2f4a7a; }
 'use strict';
 
 // ═══ 与 Python 的桥 ═══
-const api = (window.pywebview && window.pywebview.api) ? window.pywebview.api : mockApi();
+// 绝不能在解析时把 api 固定死：pywebview 的桥是页面加载完之后才注入的
+// （官方要求监听 pywebviewready）。macOS 的 WKWebView 注入更晚，写死就会
+// 永远落到 mockApi()，表现为「进不了引导页 + 点开始准备后永久停在准备中 +
+// 界面数据全是假的」。这里改成惰性代理 + 显式等待。
+let REAL_API = null;
+const MOCK_API = (location.search.indexOf('mock=1') >= 0) ? mockApi() : null;
+const api = new Proxy({}, {
+  get(_t, name){
+    const src = REAL_API || MOCK_API;
+    if (src && typeof src[name] === 'function') return src[name].bind(src);
+    return async () => { throw new Error('后端桥接未就绪：' + String(name)); };
+  }
+});
+function bridgeUp(){ return !!(window.pywebview && window.pywebview.api); }
+function waitBridge(ms){
+  if (bridgeUp()){ REAL_API = window.pywebview.api; return Promise.resolve(true); }
+  return new Promise(function(res){
+    let done = false;
+    const finish = (v) => { if (!done){ done = true; res(v); } };
+    window.addEventListener('pywebviewready', function(){
+      if (bridgeUp()){ REAL_API = window.pywebview.api; finish(true); }
+    });
+    const t0 = Date.now();
+    const iv = setInterval(function(){
+      if (bridgeUp()){ REAL_API = window.pywebview.api; clearInterval(iv); finish(true); }
+      else if (Date.now() - t0 > (ms || 15000)){ clearInterval(iv); finish(false); }
+    }, 120);
+  });
+}
 
 let S = null;          // 后端 state
 let busy = false;
@@ -356,7 +385,7 @@ let ready = false;
 const $ = (id) => document.getElementById(id);
 
 // ── 事件接收（由 app.py 调 window.__onEvent）──
-window.__onEvent = function(kind, data){
+function handleEvent(kind, data){
   if (kind === 'progress') {
     setProgress(data.pct, data.text, data.label);
     if (data.step === 'done') {
@@ -428,7 +457,32 @@ window.__onEvent = function(kind, data){
       }
     }
   }
-};
+}
+
+// 依旧挂上推送通道：能推就推（Windows 上通常可用），推不到也无所谓，轮询在跑
+window.__onEvent = handleEvent;
+
+// ── 轮询兜底 ──
+// macOS 的 WKWebView 下，Python 后台线程调 window.evaluate_js 会被静默吞掉，
+// 界面因此永远收不到进度、卡死在「准备中」。改成主动拉：300ms 一次，按 seq 去重。
+let pollTimer = null, pollSeq = 0, pollTicks = 0;
+function startPolling(){
+  stopPolling();
+  pollSeq = 0; pollTicks = 0;
+  pollTimer = setInterval(async () => {
+    pollTicks++;
+    if (pollTicks > 24000) { stopPolling(); return; }   // 约 2 小时兜底，别无限轮询
+    let p = null;
+    try { p = await api.poll(); } catch (e) { return; }
+    if (!p) return;
+    if (p.seq > pollSeq) { pollSeq = p.seq; handleEvent(p.kind, p.data || {}); }
+    const k = p.kind, d = p.data || {};
+    const finished = (k === 'error') ||
+                     (k === 'phase' && (d.phase === 'running' || d.phase === 'exited'));
+    if (finished) stopPolling();
+  }, 300);
+}
+function stopPolling(){ if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
 
 function toast(t){
   $('pill').className = 'pill';
@@ -587,10 +641,11 @@ $('btnMain').onclick = async () => {
   if (busy) return;
   if (!ready) { startInstall(); return; }
   const r = await api.launch();
-  if (r && r.ok === false) { toast(r.error); }
+  if (r && r.ok === false) { toast(r.error); } else { startPolling(); }
 };
 
 $('btnSettings').onclick = () => $('panel').classList.add('on');
+$('btnOnboard').onclick = () => { $('panel').classList.remove('on'); openWizard(); };
 $('btnClosePanel').onclick = () => $('panel').classList.remove('on');
 $('btnReset').onclick = async () => {
   const st = await api.reset_settings();
@@ -839,11 +894,22 @@ async function startInstall(){
   $('btnMain').disabled = true;
   $('btnMain').textContent = '准备中';
   setBar('indet');
+  startPolling();
 }
 
 // ═══ 启动 ═══
 (async function init(){
   try {
+    // 先等后端桥接就绪（macOS 上桥是页面加载后才注入的）
+    const bridged = await waitBridge(15000);
+    if (!bridged && !MOCK_API) {
+      $('pText').textContent = '启动器后端没有响应（桥接未就绪），请重启应用';
+      setBar('error');
+      $('btnMain').textContent = '重试';
+      $('btnMain').disabled = false;
+      $('btnMain').onclick = () => location.reload();
+      return;
+    }
     const st = await api.bootstrap();
     render(st);
     resetSteps();
@@ -877,7 +943,8 @@ function realApi(HWD){
     reset_settings: async () => clone(HWD),
     finish_onboard: async () => { (HWD.settings = HWD.settings || {}).onboarded = true;
                                   return clone(HWD); },
-    benchmark: async () => clone(HWD.bench || {ok:false})
+    benchmark: async () => clone(HWD.bench || {ok:false}),
+    poll: async () => ({seq:0, kind:null, data:{}})
   };
 }
 
@@ -926,7 +993,8 @@ function mockApi(){
     set_auto_join: async () => clone(HWD),
     reset_settings: async () => clone(HWD),
     finish_onboard: async () => { HWD.settings.onboarded = true; return clone(HWD); },
-    benchmark: async () => clone(HWD.bench || {ok:false})
+    benchmark: async () => clone(HWD.bench || {ok:false}),
+    poll: async () => ({seq:0, kind:null, data:{}})
   };
 }
 </script>

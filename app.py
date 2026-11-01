@@ -123,17 +123,43 @@ class Api:
         self.proc: subprocess.Popen | None = None
         self._busy = threading.Lock()
         self._bench_thread: threading.Thread | None = None
+        # 事件状态：macOS（pywebview/cocoa）下从后台线程调 evaluate_js 会被静默吞掉，
+        # 界面改为靠轮询 poll() 拿进度，evaluate_js 只作为 Windows 上的即时锦上添花。
+        self.progress: dict = {"seq": 0, "kind": None, "data": {}}
+        self._log_path = os.path.join(appdata_dir(), "launcher.log")
 
-    # ── 向后端推事件 ──
+    # ── 日志（用户机器上排障用；>512KB 自动轮转）──
+    def _log(self, msg: str):
+        try:
+            if os.path.exists(self._log_path) and os.path.getsize(self._log_path) > 512 * 1024:
+                os.replace(self._log_path, self._log_path + ".1")
+            with open(self._log_path, "a", encoding="utf-8") as f:
+                f.write("[%s] %s\n" % (time.strftime("%Y-%m-%d %H:%M:%S"), msg))
+        except Exception:
+            pass
+
+    # ── 事件：先落进可轮询的状态，再尝试即时推送 ──
     def emit(self, kind: str, payload: dict):
+        try:
+            self.progress = {"seq": int(self.progress.get("seq") or 0) + 1,
+                             "kind": kind, "data": payload or {}}
+        except Exception:
+            pass
+        if kind == "error":
+            self._log("error: %s" % ((payload or {}).get("text") or ""))
         if not self.win:
             return
         try:
             data = json.dumps(payload, ensure_ascii=False)
             self.win.evaluate_js(
                 f"window.__onEvent && window.__onEvent({json.dumps(kind)}, {data})")
-        except Exception:
-            pass
+        except Exception as e:
+            # macOS 上后台线程调用 evaluate_js 会抛错（界面已改走轮询，功能不受影响）
+            self._log("evaluate_js 推送失败（轮询兜底）: %s" % e)
+
+    # ── 前端轮询入口：返回最后一次事件（seq 递增，前端据此判断是否新事件）──
+    def poll(self) -> dict:
+        return dict(self.progress)
 
     def _run_bg(self, fn, *a, **kw):
         t = threading.Thread(target=fn, args=a, kwargs=kw, daemon=True)

@@ -54,8 +54,28 @@ def main() -> None:
         args += ["--hidden-import", "webview.platforms.winforms",
                  "--hidden-import", "clr",
                  "--collect-all", "webview"]
+    # 图标：mac 必须 .icns（PyInstaller 会自动写进 CFBundleIconFile），win 用 .ico。
+    # 上次打成默认 Python 图标就是因为这里没传 --icon、仓库里也没有素材。
+    icon = None
+    if sys.platform == "darwin" and os.path.exists(os.path.join(ROOT, "assets", "icon.icns")):
+        icon = os.path.join("assets", "icon.icns")
+    elif sys.platform == "win32" and os.path.exists(os.path.join(ROOT, "assets", "icon.ico")):
+        icon = os.path.join("assets", "icon.ico")
+    if icon:
+        args += ["--icon", icon]
+        print(f"+ 使用图标: {icon}", flush=True)
+    else:
+        print("! 没找到图标素材，产物将使用 PyInstaller 默认图标", flush=True)
+
     args.append("app.py")
     run(args)
+
+    # 校验图标真的进了包（不然等于没设）
+    if sys.platform == "darwin" and icon:
+        res_dir = os.path.join(ROOT, "dist", "cogcraft.app", "Contents", "Resources")
+        icns = [f for f in os.listdir(res_dir) if f.endswith(".icns")] if os.path.isdir(res_dir) else []
+        assert icns, "macOS 包内没有 .icns，图标没打进去"
+        print(f"+ 包内图标: {icns}", flush=True)
 
     # 打包：mac 必须是 .app，用 ditto 才保得住符号链接
     out_name = f"cogcraft-{sysname}-{arch}.zip"

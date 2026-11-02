@@ -242,8 +242,39 @@ class Pipeline:
         self._emit(Step.LIBRARIES, 0.3, "下载缺失的运行库…")
         st = ensure_libraries(merged, self.game_dir, os_name(),
                               rule_allows, library_path)
+        if st.get("sources"):
+            self.log("[libs] 源连通性：" + " ｜ ".join(
+                f"{x['host']}={'通' if x['ok'] else '不通(' + str(x.get('err'))[:40] + ')'}"
+                for x in st["sources"]))
+
+        # 一轮下来还有缺的，先原样重试一次。
+        # 实测失败报告里最常见的是「下载到一半网络抽风」，重试一次就能过，
+        # 不该让玩家自己去点第二遍。
         if st.get("missing_after"):
-            raise PipelineError(f"仍有 {st['missing_after']} 个运行库缺失，请重试")
+            self._emit(Step.LIBRARIES, 0.6, "有文件没下完，正在重试…")
+            self.log("[libs] 首轮仍有 %d 个缺失，重试一次" % st["missing_after"])
+            st2 = ensure_libraries(merged, self.game_dir, os_name(),
+                                   rule_allows, library_path)
+            if st2.get("downloaded"):
+                st = st2
+
+        if st.get("missing_after"):
+            # 把「哪个文件、试过哪几个源、为什么失败」写进日志和错误信息，
+            # 别只丢一句「仍有 N 个缺失」让人猜（上一次就是这么卡住的）。
+            detail = []
+            for e in (st.get("failed") or [])[:5]:
+                detail.append(f"{e['path']}\n      " + " ｜ ".join(e["tried"][:3]))
+            for line in detail:
+                self.log("[libs] 下载失败：" + line.replace("\n", " "))
+            msg = (f"仍有 {st['missing_after']} 个运行库缺失。\n\n"
+                   + ("\n".join(detail[:3]) if detail else "（没有可用的下载源）"))
+            if st.get("sources"):
+                msg += "\n\n源连通性：" + " ｜ ".join(
+                    f"{x['host']}={'通' if x['ok'] else '不通'}" for x in st["sources"])
+            if st.get("failed_file"):
+                msg += f"\n\n完整清单已写到：\n{st['failed_file']}"
+                self.log("[libs] 完整清单：" + str(st["failed_file"]))
+            raise PipelineError(msg)
         self._emit(Step.LIBRARIES, 1.0,
                    f"运行库齐全" + (f"（补了 {st.get('downloaded', 0)} 个）"
                                     if st.get("downloaded") else ""))

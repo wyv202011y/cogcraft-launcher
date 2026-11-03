@@ -15,6 +15,7 @@ import os
 import socket
 import subprocess
 import sys
+import webbrowser
 import threading
 import time
 import traceback
@@ -194,6 +195,7 @@ DEFAULT_SETTINGS = {
     "variant": None,          # None = 按硬件自动推荐
     "memory_mb": None,        # None = 按硬件自动算
     "player_name": "",
+    "player_name_set": False,     # 玩家自己填过没有：没填过就别把系统用户名当昵称塞进引导页
     "java_path": None,
     "game_dir": None,
     "auto_join": True,
@@ -465,6 +467,22 @@ class Api:
                 pass
         self.emit("bench", res)
 
+    def open_url(self, url: str) -> dict:
+        """用系统浏览器打开外部链接（加群页等）。
+
+        为什么不让页面直接用 <a target="_blank">：pywebview 的 WebView 里那会
+        开一个没有地址栏的空白窗口，或者干脆什么都不发生。交给系统浏览器最稳。
+        只放行 http/https —— 这个方法是 JS 能调的，别给它留 file:// 或自定义协议。
+        """
+        u = (url or "").strip()
+        if not u.lower().startswith(("http://", "https://")) or len(u) > 2000:
+            return {"ok": False, "error": "只支持 http/https 链接"}
+        try:
+            webbrowser.open(u)
+            return {"ok": True, "url": u}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
     def set_variant(self, variant_id: str) -> dict:
         self.settings["variant"] = variant_id
         save_settings(self.settings)
@@ -477,6 +495,7 @@ class Api:
 
     def set_player(self, name: str) -> dict:
         self.settings["player_name"] = (name or "").strip()[:16]
+        self.settings["player_name_set"] = True
         save_settings(self.settings)
         return self.state()
 

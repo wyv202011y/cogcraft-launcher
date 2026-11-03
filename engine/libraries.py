@@ -10,11 +10,12 @@ cogcraft 拼装引擎 —— 依赖库下载器
 下载源: 优先 BMCLAPI 镜像（国内 ~10MB/s），失败回退原始地址。
 """
 
-import json, os, sys, time, urllib.error, urllib.request, ssl, concurrent.futures
+import hashlib, json, os, sys, time, urllib.error, urllib.request, ssl, concurrent.futures
 
 BMCLAPI = "https://bmclapi.bangbang93.com"      # 老域名，偶尔比 bmclapi2 更稳
 UA = "cogcraft-launcher/1.0"
-CTX_FALLBACK = ""      # 非空 = 回落到系统根证书了（macOS 冻结包里这几乎必然全线证书错误）
+CTX_FALLBACK = ""
+TLS_HINT = [False]        # True = 本轮出现过证书校验失败（八成是本机有 TLS 拦截软件）      # 非空 = 回落到系统根证书了（macOS 冻结包里这几乎必然全线证书错误）
 
 
 def _make_ctx():
@@ -78,7 +79,26 @@ def _host(url: str) -> str:
         return url[:40]
 
 
-def _fetch(url, timeout=60, retries=3):
+_NO_VERIFY = None
+
+
+def _no_verify_ctx():
+    """免验证上下文 —— **只在 sha1+size 都在手里时**才允许用。
+
+    道理和 net._tls_ctx(insecure=True) 一样：TLS 被本地软件拆开时，链验证必然失败，
+    但内容对不对仍能靠清单里的 sha1 离线断定。牺牲的是「传输机密性」，
+    保住的是「拿到的东西是对的」。
+    """
+    global _NO_VERIFY
+    if _NO_VERIFY is None:
+        c = ssl.create_default_context()
+        c.check_hostname = False
+        c.verify_mode = ssl.CERT_NONE
+        _NO_VERIFY = c
+    return _NO_VERIFY
+
+
+def _fetch(url, timeout=60, retries=3, insecure=False):
     """单源下载。返回 bytes；该源没救时抛 _Permanent。
 
     为什么要区分：以前一律重试 3 次，遇到 404 也重试，白白多花 2.4 秒/个；
@@ -88,7 +108,8 @@ def _fetch(url, timeout=60, retries=3):
     for i in range(retries + 1):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=timeout, context=CTX) as r:
+            ctx = _no_verify_ctx() if insecure else CTX
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
                 return r.read()
         except urllib.error.HTTPError as e:
             last = e
@@ -129,8 +150,11 @@ def probe_sources(sample_url: str, timeout=8) -> list:
             out.append({"host": _host(u), "ok": False, "err": str(e),
                         "ms": int((time.time() - t0) * 1000)})
         except Exception as e:
-            out.append({"host": _host(u), "ok": False,
-                        "err": f"{type(e).__name__}: {str(e)[:70]}",
+            msg = f"{type(e).__name__}: {str(e)[:70]}"
+            if "CERTIFICATE_VERIFY_FAILED" in str(e):
+                msg = "证书校验失败（本机有软件在解密 HTTPS）"
+                TLS_HINT[0] = True
+            out.append({"host": _host(u), "ok": False, "err": msg,
                         "ms": int((time.time() - t0) * 1000)})
     return out
 
@@ -156,6 +180,7 @@ def ensure_libraries(merged: dict, game_dir: str, os_name: str,
     if not tasks:
         return {"needed": 0, "downloaded": 0, "errors": 0, "missing_after": 0}
 
+    TLS_HINT[0] = False
     sources = probe_sources(tasks[0][2]) if tasks else []
     if CTX_FALLBACK:
         sources.append({"host": "(根证书)", "ok": False,
@@ -167,13 +192,13 @@ def ensure_libraries(merged: dict, game_dir: str, os_name: str,
         rel, dst, url, size, sha1 = t
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         tried = []
+        cert_blocked = False
         for u in rewrite_url(url):
             try:
                 data = _fetch(u)
                 if size and len(data) != size:
                     raise IOError(f"大小不符 期望{size} 实得{len(data)}")
                 if sha1:
-                    import hashlib
                     got = hashlib.sha1(data).hexdigest()
                     if got != sha1:
                         raise IOError(f"sha1 不符 {got[:8]} != {sha1[:8]}")
@@ -186,8 +211,35 @@ def ensure_libraries(merged: dict, game_dir: str, os_name: str,
                 return None
             except _Permanent as e:
                 tried.append(f"{_host(u)}: {e}")
+            except ssl.SSLCertVerificationError as e:
+                tried.append(f"{_host(u)}: 证书校验失败（{str(e)[:40]}）")
+                TLS_HINT[0] = True
+                cert_blocked = True
             except Exception as e:
+                if "CERTIFICATE_VERIFY_FAILED" in str(e) or "证书" in str(e):
+                    TLS_HINT[0] = True
+                    cert_blocked = True
                 tried.append(f"{_host(u)}: {type(e).__name__}: {str(e)[:80]}")
+        # 全源都被证书卡住，且清单给了 sha1+size → 免验证再来一轮，靠哈希断定内容
+        if cert_blocked and sha1 and size:
+            for u in rewrite_url(url):
+                try:
+                    data = _fetch(u, insecure=True)
+                    if len(data) != size:
+                        raise IOError(f"大小不符 期望{size} 实得{len(data)}")
+                    got = hashlib.sha1(data).hexdigest()
+                    if got != sha1:
+                        raise IOError(f"sha1 不符 {got[:8]} != {sha1[:8]}")
+                    tmp = dst + ".part"
+                    with open(tmp, "wb") as f:
+                        f.write(data)
+                    os.replace(tmp, dst)
+                    done["n"] += 1
+                    done["bytes"] += len(data)
+                    done["insecure"] = done.get("insecure", 0) + 1
+                    return None
+                except Exception as e:
+                    tried.append(f"{_host(u)}(免验证): {type(e).__name__}: {str(e)[:60]}")
         # 排障友好：写清「哪个文件、试过哪几个源、各自为什么失败」
         errors.append({"path": rel, "url": url, "tried": tried})
         return None
@@ -222,7 +274,9 @@ def ensure_libraries(merged: dict, game_dir: str, os_name: str,
 
     return {"needed": len(tasks), "downloaded": done["n"],
             "bytes": done["bytes"], "errors": len(errors),
+            "insecure": done.get("insecure", 0),
             "sources": sources,
+            "tls_intercepted": TLS_HINT[0],
             "error_samples": errors[:5], "failed": failed[:20],
             "failed_file": os.path.join(lib_root, "libraries_failed.txt") if errors else None,
             "missing_after": missing_after}

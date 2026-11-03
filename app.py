@@ -101,6 +101,9 @@ def appdata_dir() -> str:
         _DATA_DIR = cand
     else:
         _DATA_DIR = userdata_dir()
+    # 告诉 net.py 数据目录在哪：它要在 <data>/certs/ 里找玩家自备的根证书，
+    # 也要往那儿缓存 macOS 钥匙串导出的 CA（拦截型网络下这是唯一能下动的前提）。
+    os.environ["COGCRAFT_DATA_DIR"] = _DATA_DIR
     return _DATA_DIR
 
 

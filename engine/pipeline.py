@@ -271,13 +271,27 @@ class Pipeline:
             if st.get("sources"):
                 msg += "\n\n源连通性：" + " ｜ ".join(
                     f"{x['host']}={'通' if x['ok'] else '不通'}" for x in st["sources"])
+            if st.get("tls_intercepted"):
+                msg += ("\n\n⚠️ 所有源都报「证书校验失败」= 你电脑上有软件在解密 HTTPS。\n"
+                        "常见于：网络加速器/游戏加速器、代理软件、杀毒软件的 HTTPS 扫描、校园网门户。\n"
+                        "处置二选一：\n"
+                        "  1) 关掉它，再点一次重试；\n"
+                        "  2) 把它的根证书（.pem/.crt/.cer）放进下面的 certs 目录，重启启动器即可信任：\n"
+                        "     " + os.path.join(os.path.dirname(self.game_dir), "certs"))
             if st.get("failed_file"):
                 msg += f"\n\n完整清单已写到：\n{st['failed_file']}"
                 self.log("[libs] 完整清单：" + str(st["failed_file"]))
             raise PipelineError(msg)
+        note = ""
+        if st.get("insecure"):
+            # 免验证下载过 = 本机在拆 HTTPS。内容仍按 sha1 校验过了，但必须让用户知道
+            self.log("[libs] 有 %d 个构件因本机 HTTPS 被拦截，改用哈希校验下载" % st["insecure"])
+            note = f"（其中 {st['insecure']} 个因本机证书拦截按哈希校验下载）"
+        if st.get("tls_intercepted") and not st.get("insecure"):
+            self.log("[libs] 出现证书校验失败，但已用其它源补齐")
         self._emit(Step.LIBRARIES, 1.0,
                    f"运行库齐全" + (f"（补了 {st.get('downloaded', 0)} 个）"
-                                    if st.get("downloaded") else ""))
+                                    if st.get("downloaded") else "") + note)
 
     # ────────── 4. 资源 ──────────
 

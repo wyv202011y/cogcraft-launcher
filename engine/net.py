@@ -23,6 +23,9 @@ import os
 import random
 import socket
 import ssl
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 import urllib.error
@@ -30,6 +33,80 @@ import urllib.request
 from urllib.parse import urlsplit
 
 UA = "cogcraft-launcher/1.0"
+TLS_INFO = {"certifi": "", "extras": [], "anchors_note": ""}
+
+
+def _data_dir_hint() -> str:
+    """数据目录由 app.py 通过 COGCRAFT_DATA_DIR 告诉我们（net 不该自己去猜路径）。"""
+    return os.environ.get("COGCRAFT_DATA_DIR", "").strip()
+
+
+def _macos_keychain_pem(data_dir: str) -> str | None:
+    """把 macOS 钥匙串里的根证书导成一份 PEM，缓存 7 天。
+
+    为什么需要：玩家机器上有 TLS 拦截软件（网络加速器 / 代理 / 杀毒的 HTTPS 扫描 /
+    校园网门户）时，它用自己的根证书做中间人。这类根证书**装在系统钥匙串里**，
+    浏览器认，但 certifi 包里的那份 Mozilla 根证书列表**没有它** ——
+    于是清单能拉（走别的路径），一到下载就全线 `CERTIFICATE_VERIFY_FAILED:
+    self-signed certificate in certificate chain`。实测玩家机就是这个。
+
+    系统默认上下文在 macOS 上读不到钥匙串（CPython 用 OpenSSL 的默认路径），
+    所以只能自己用 `security find-certificate -a -p` 导出来再叠加。
+    """
+    if sys.platform != "darwin":
+        return None
+    base = data_dir or os.path.join(tempfile.gettempdir(), "cogcraft")
+    cache_dir = os.path.join(base, "certs")
+    out = os.path.join(cache_dir, ".keychain-ca.pem")
+    try:
+        if os.path.isfile(out) and os.path.getsize(out) > 0 and \
+                (time.time() - os.path.getmtime(out)) < 7 * 86400:
+            return out
+    except OSError:
+        pass
+    keychains = [
+        "/System/Library/Keychains/SystemRootCertificates.keychain",
+        "/Library/Keychains/System.keychain",
+        os.path.expanduser("~/Library/Keychains/login.keychain-db"),
+    ]
+    parts = []
+    for kc in keychains:
+        if not os.path.exists(kc) and "login" not in kc:
+            continue
+        try:
+            r = subprocess.run(["security", "find-certificate", "-a", "-p", kc],
+                               capture_output=True, timeout=25)
+            if r.returncode == 0 and r.stdout:
+                parts.append(r.stdout.decode("utf-8", "replace"))
+        except Exception:
+            continue
+    if not parts:
+        return None
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(out, "w", encoding="utf-8") as f:
+            f.write("\n".join(parts))
+        return out if os.path.getsize(out) > 0 else None
+    except OSError:
+        return None
+
+
+def _extra_ca_files() -> list[str]:
+    """附加信任源：<数据目录>/certs/*.pem|crt|cer（玩家自己放的）+ macOS 钥匙串导出。"""
+    out = []
+    d = _data_dir_hint()
+    if d:
+        cdir = os.path.join(d, "certs")
+        if os.path.isdir(cdir):
+            for n in sorted(os.listdir(cdir)):
+                if n.lower().endswith((".pem", ".crt", ".cer")):
+                    out.append(os.path.join(cdir, n))
+    kc = _macos_keychain_pem(d)
+    if kc:
+        out.append(kc)
+    return out
+
+
 def _make_tls() -> ssl.SSLContext:
     """TLS 上下文必须和 requests 用同一套根证书。
 
@@ -46,8 +123,19 @@ def _make_tls() -> ssl.SSLContext:
     try:
         import certifi
         ctx.load_verify_locations(cafile=certifi.where())
+        TLS_INFO["certifi"] = certifi.where()
     except Exception:
         pass
+    # 系统钥匙串 / 玩家自备的根证书：拦截型网络下这是唯一出路
+    loaded = []
+    for f in _extra_ca_files():
+        try:
+            ctx.load_verify_locations(cafile=f)
+            loaded.append(os.path.basename(f))
+        except Exception:
+            continue
+    TLS_INFO["extras"] = loaded
+    TLS_INFO["anchors_note"] = ("信任源: certifi" + (f" + {len(loaded)} 个附加" if loaded else ""))
     return ctx
 
 

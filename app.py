@@ -35,11 +35,15 @@ import updater as updater_mod  # noqa: E402
 APP_NAME = "cogcraft"
 # 版本号唯一来源：CI 打包时从这里读，发版脚本也从这里读。
 # 改版本 = 改这一行，别在别处再写一份。
-VERSION = "1.0.6"
+VERSION = "1.0.7"
 MANIFEST_URL = "https://www.cogcraft.top/client/manifest.json"
 # 启动器自身的更新元数据（几十字节的 JSON），与清单分开：
 # 清单管「游戏文件」，这里管「启动器本体」，两者的发布节奏不同。
 LAUNCHER_META_URL = "https://www.cogcraft.top/client/launcher/latest.json"
+# 运行中重查清单的间隔（秒）。用户明确要求「不重启客户端也能收到下发的更新」，
+# 所以不能只在启动时查一次。默认 5 分钟；带 If-None-Match 条件请求，
+# 线上没改就回 304（几十字节），不会白耗玩家流量。
+WATCH_INTERVAL_SEC = int(os.environ.get("COGCRAFT_UPDATE_INTERVAL") or 300)
 MANIFEST_FALLBACK = os.path.join(_HERE, "manifest.example.json")
 
 
@@ -291,6 +295,9 @@ class Api:
         # 启动器自更新检查结果（None = 还没查过）
         self.update: dict | None = None
         self.update_checking = False
+        # 定时轮询线程的刹车（窗口关掉时 set 一下让它尽快退出）
+        self._watch_stop = threading.Event()
+        self._watch_thread: threading.Thread | None = None
 
     # ── 日志（用户机器上排障用；>512KB 自动轮转）──
     def _log(self, msg: str):
@@ -447,16 +454,35 @@ class Api:
         return {"ok": True}
 
     # ── 更新检查 ──
-    def check_updates(self, force: bool = False) -> dict:
+    def check_updates(self, force: bool = False, refresh: bool = False) -> dict:
         """检查「启动器本体」和「游戏文件」两侧是否有更新。
 
         绝不抛异常、绝不阻塞启动：拉不到元数据就是「这次没查到」，
         界面照常能进游戏。游戏文件那侧的结论直接来自 state() 里的 plan，
         这里只额外算一份给界面显示的摘要，避免前端自己拼。
+
+        `refresh=True` 会重新拉一次清单（带 ETag / Last-Modified）：
+        清单变了就换成新的，没变就沿用缓存 —— 运行中的定时轮询走这条路，
+        否则 self.manifest 永远是启动那一刻的快照，线上的改动要等重启才看得见。
         """
-        if self.update and not force:
+        if self.update and not force and not refresh:
             return self.update
         res = {"launcher": None, "files": None, "checked_at": int(time.time())}
+        if refresh:
+            try:
+                fresh = manifest_mod.fetch(MANIFEST_URL, cache_dir=appdata_dir(),
+                                           conditional=True)
+                if fresh.get("_not_modified"):
+                    res["manifest_changed"] = False
+                else:
+                    self.manifest = manifest_mod.validate(fresh)
+                    self.manifest_error = None
+                    res["manifest_changed"] = True
+                    self._log("[update] 清单已更新：%s" % (fresh.get("updated") or "?"))
+            except Exception as e:
+                # 拉不到就继续用手上的清单，不能因为一次网络抖动把界面搞空
+                res["manifest_changed"] = False
+                self._log("[update] 刷新清单失败（沿用旧清单）: %s" % e)
         try:
             self.update_checking = True
             meta = updater_mod.fetch_meta(LAUNCHER_META_URL)
@@ -507,11 +533,35 @@ class Api:
             self._run_bg(lambda: self._safe_check_updates(force))
         return {"ok": True, "pending": True}
 
-    def _safe_check_updates(self, force: bool = True) -> None:
+    def _safe_check_updates(self, force: bool = True, refresh: bool = False) -> None:
         try:
-            self.check_updates(force=force)
+            self.check_updates(force=force, refresh=refresh)
         except Exception as e:                     # 检查更新绝不影响启动
             self._log("[update] 后台检查异常: %s" % e)
+
+    def start_update_watch(self) -> dict:
+        """起一个常驻的后台线程：每隔 WATCH_INTERVAL_SEC 安静地重查一次。
+
+        用户的要求是「哪怕用户不重启客户端也能自动检查到下发的更新」，
+        所以检查不能只发生一次。线程是 daemon，窗口关了跟着进程一起走；
+        每轮的请求带条件头，线上没改只有 304。
+        """
+        if self._watch_thread and self._watch_thread.is_alive():
+            return {"ok": True, "already": True, "interval": WATCH_INTERVAL_SEC}
+        self._watch_stop.clear()
+
+        def _loop():
+            self._log("[update] 定时检查已启动，间隔 %d 秒" % WATCH_INTERVAL_SEC)
+            while not self._watch_stop.wait(WATCH_INTERVAL_SEC):
+                try:
+                    self._safe_check_updates(True, refresh=True)
+                except Exception as e:
+                    self._log("[update] 定时检查异常: %s" % e)
+
+        self._watch_thread = threading.Thread(target=_loop, daemon=True,
+                                              name="update-watch")
+        self._watch_thread.start()
+        return {"ok": True, "interval": WATCH_INTERVAL_SEC}
 
     def open_download_page(self) -> dict:
         """打开官网客户端下载页（启动器有新版本时用）。"""
@@ -785,6 +835,8 @@ def main():
         api._log(f"[migrate] {mig} → 数据目录 {appdata_dir()}")
     # 每次启动都查一遍（用户要求）：丢后台，桥和界面都不等它
     api._run_bg(lambda: api._safe_check_updates(True))
+    # 然后挂着定时重查：线上发了新东西，用户不重启客户端也能看到提示
+    api.start_update_watch()
     ui = os.path.join(_HERE, "ui", "index.html")
     win = webview.create_window(
         "cogcraft", f"file://{ui}",

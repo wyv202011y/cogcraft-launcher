@@ -21,21 +21,67 @@ class ManifestError(Exception):
 
 # ────────────────────────── 获取 ──────────────────────────
 
-def fetch(url: str, timeout: float = 15.0, cache_dir: str | None = None) -> dict:
-    """下载清单。网络失败时若有本地缓存则降级使用（离线也能进游戏）。"""
+def _save_cache(cache_dir: str | None, url: str, data: dict,
+                etag: str = "", last_modified: str = "") -> None:
+    if not cache_dir:
+        return
+    try:
+        os.makedirs(cache_dir, exist_ok=True)
+        with open(os.path.join(cache_dir, "manifest.cache.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump({"_fetched_at": int(time.time()), "_url": url,
+                       "_etag": etag, "_last_modified": last_modified, "data": data},
+                      f, ensure_ascii=False)
+    except Exception:
+        pass
+
+
+def fetch(url: str, timeout: float = 15.0, cache_dir: str | None = None,
+          conditional: bool = False) -> dict:
+    """下载清单。网络失败时若有本地缓存则降级使用（离线也能进游戏）。
+
+    `conditional=True` 时带上缓存里的 ETag / Last-Modified 先去问一声：
+    服务端回 304 就直接用本地缓存，并打上 `_not_modified=True`。
+    运行中每 5 分钟轮询一次靠的就是它 —— 清单 227 KB，不这么做的话
+    一天要给每个玩家白灌 60 MB 流量，还白白拖着界面等。
+    """
+    cached_path = os.path.join(cache_dir, "manifest.cache.json") if cache_dir else None
+    cached_blob: dict | None = None
+    if cached_path and os.path.exists(cached_path):
+        try:
+            with open(cached_path, encoding="utf-8") as f:
+                cached_blob = json.load(f)
+        except Exception:
+            cached_blob = None
+
     err = None
     try:
         # 走 net.py，不引入 requests：整个启动器只留一套网络栈。
         # 之前清单用 requests（自带 certifi 根证书）、下载用 urllib（系统根证书），
         # macOS 上就是两条链信任锚不同 —— 清单能拉、下载全崩，还多背一个依赖。
         import net
-        data = json.loads(net.get_bytes(url, timeout=timeout).decode("utf-8"))
-        if cache_dir:
-            os.makedirs(cache_dir, exist_ok=True)
-            with open(os.path.join(cache_dir, "manifest.cache.json"), "w",
-                      encoding="utf-8") as f:
-                json.dump({"_fetched_at": int(time.time()), "_url": url, "data": data},
-                          f, ensure_ascii=False)
+        if conditional and cached_blob and cached_blob.get("data"):
+            got = net.get_conditional(
+                url, timeout=timeout,
+                etag=str(cached_blob.get("_etag") or ""),
+                last_modified=str(cached_blob.get("_last_modified") or ""))
+            if got.get("status") == 304:
+                data = dict(cached_blob["data"])
+                data["_not_modified"] = True
+                data["_cached_at"] = cached_blob.get("_fetched_at")
+                return data
+            data = json.loads((got.get("body") or b"{}").decode("utf-8"))
+            _save_cache(cache_dir, url, data,
+                        str(got.get("etag") or ""), str(got.get("last_modified") or ""))
+            return data
+
+        # 首次（或不做条件请求时）也要用 get_conditional —— 得把响应头里的
+        # ETag / Last-Modified 存进缓存，否则下一次 conditional 请求永远发不出去，
+        # 运行中每 5 分钟就会白白重下整份清单。
+        got = net.get_conditional(url, timeout=timeout)
+        data = json.loads((got.get("body") or b"{}").decode("utf-8"))
+        _save_cache(cache_dir, url, data,
+                    str(got.get("etag") or ""), str(got.get("last_modified") or ""))
         return data
     except Exception as e:
         err = e

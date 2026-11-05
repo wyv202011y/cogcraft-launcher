@@ -367,6 +367,51 @@ def get_bytes(url: str, timeout: float = 30.0, retries: int = 3,
     raise IOError(f"请求失败 {url}: {last}")
 
 
+def get_conditional(url: str, timeout: float = 20.0, etag: str = "",
+                    last_modified: str = "", retries: int = 2) -> dict:
+    """带 If-None-Match / If-Modified-Since 的 GET，用来「安静地」轮询。
+
+    服务端没改就回 304（body 为空，几十字节），不会白下整份清单：
+    清单 227 KB，五分钟一查不加条件的话，一天要给玩家多灌 60 MB。
+
+    ⚠️ 第一次请求（还没有 ETag 时）也要走这里，别图省事去调 get_bytes ——
+    那样拿不到响应头，缓存里永远没有 ETag，之后就再也发不出条件请求，
+    「304」这条路径等于从来没生效过。
+
+    返回 `{"status": 304}`，或
+        `{"status": 200, "body": bytes, "etag": str, "last_modified": str}`。
+    """
+    prefer_ipv4()
+    last: Exception | None = None
+    for i in range(max(1, retries)):
+        try:
+            req = _req(url, timeout)
+            if etag:
+                req.add_header("If-None-Match", etag)
+            if last_modified:
+                req.add_header("If-Modified-Since", last_modified)
+            with urllib.request.urlopen(req, timeout=timeout,
+                                        context=_tls_ctx()) as r:
+                return {"status": 200, "body": r.read(),
+                        "etag": (r.headers.get("ETag") or "").strip(),
+                        "last_modified": (r.headers.get("Last-Modified") or "").strip()}
+        except urllib.error.HTTPError as e:
+            if e.code == 304:                      # 条件命中，内容没变
+                return {"status": 304}
+            last = e
+            if _permanent(e):
+                break
+            if i < retries - 1:
+                _sleep_before_retry(i, e, 1.0)
+        except Exception as e:
+            last = e
+            if _permanent(e):
+                break
+            if i < retries - 1:
+                _sleep_before_retry(i, e, 1.0)
+    raise IOError(f"请求失败 {url}: {last}")
+
+
 def download_to(url: str, dest: str, timeout: float = 120.0, retries: int = 3,
                 chunk: int = 1 << 18, on_chunk=None,
                 allow_empty: bool = False, insecure: bool = False) -> int:

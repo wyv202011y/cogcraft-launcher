@@ -156,13 +156,46 @@ def _sha1_file(path: str, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
-def plan_sync(variant: dict, game_dir: str, verify_hash: bool = True) -> dict:
+def load_cache(path: str) -> dict:
+    """读「文件指纹缓存」：{rel: [size, mtime, sha1]}。
+
+    存在的意义只有一个 —— 别每次启动都把 465MB 重算一遍 sha1。
+    缓存损坏一律当空缓存，绝不因为缓存坏了拦住启动。
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            blob = json.load(f)
+        files = blob.get("files")
+        return files if isinstance(files, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_cache(path: str, kind: str, files: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"kind": kind, "files": files}, f)
+        os.replace(tmp, path)
+    except Exception:
+        pass
+
+
+def plan_sync(variant: dict, game_dir: str, verify_hash: bool = True,
+              cache: dict | None = None) -> dict:
     """算出「哪些要下、哪些已就绪、哪些要删」。
 
-    返回 {download:[...], ready:[...], delete:[...], bytes_needed:int}
+    cache（可选）是文件指纹缓存 {rel: [size, mtime, sha1]}：size 与 mtime
+    都没变、且缓存的 sha1 与清单一致时，直接判定就绪**不重算哈希**。
+    首次校验或文件被动过才会真算，算完把新指纹写回 cache（调用方负责落盘）。
+
+    返回 {download, ready, delete, bytes_needed, hashed, trusted}
     """
     download, ready = [], []
     bytes_needed = 0
+    hashed = 0
+    trusted = 0
 
     for f in variant.get("files", []):
         rel = f["path"].lstrip("/").replace("\\", "/")
@@ -172,20 +205,40 @@ def plan_sync(variant: dict, game_dir: str, verify_hash: bool = True) -> dict:
             bytes_needed += int(f.get("size") or 0)
             continue
         want_size = f.get("size")
-        if want_size and os.path.getsize(dest) != int(want_size):
+        try:
+            st = os.stat(dest)
+        except Exception:
+            download.append(f)
+            bytes_needed += int(f.get("size") or 0)
+            continue
+        size = st.st_size
+        if want_size and size != int(want_size):
             download.append(f)
             bytes_needed += int(want_size)
             continue
         want_sha = (f.get("sha1") or "").lower()
+        mtime = int(st.st_mtime)
+        if cache is not None and want_sha:
+            c = cache.get(rel)
+            if (isinstance(c, list) and len(c) == 3
+                    and int(c[0]) == size and int(c[1]) == mtime
+                    and str(c[2]).lower() == want_sha):
+                ready.append(f)
+                trusted += 1
+                continue
         if verify_hash and want_sha:
             try:
-                if _sha1_file(dest) != want_sha:
-                    download.append(f)
-                    bytes_needed += int(f.get("size") or 0)
-                    continue
+                got = _sha1_file(dest)
+                hashed += 1
             except Exception:
                 download.append(f)
                 continue
+            if got != want_sha:
+                download.append(f)
+                bytes_needed += int(f.get("size") or 0)
+                continue
+            if cache is not None:
+                cache[rel] = [size, mtime, want_sha]
         ready.append(f)
 
     # 清单明确要求删除的（例如从高配切到流畅版要移除那 18 个模组）
@@ -196,4 +249,4 @@ def plan_sync(variant: dict, game_dir: str, verify_hash: bool = True) -> dict:
             delete.append(rel)
 
     return {"download": download, "ready": ready, "delete": delete,
-            "bytes_needed": bytes_needed}
+            "bytes_needed": bytes_needed, "hashed": hashed, "trusted": trusted}

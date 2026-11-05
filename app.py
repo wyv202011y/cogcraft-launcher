@@ -30,9 +30,16 @@ import jvm as jvm_mod  # noqa: E402
 import manifest as manifest_mod  # noqa: E402
 import pipeline as pipeline_mod  # noqa: E402
 import bench as bench_mod  # noqa: E402
+import updater as updater_mod  # noqa: E402
 
 APP_NAME = "cogcraft"
+# 版本号唯一来源：CI 打包时从这里读，发版脚本也从这里读。
+# 改版本 = 改这一行，别在别处再写一份。
+VERSION = "1.0.4"
 MANIFEST_URL = "https://www.cogcraft.top/client/manifest.json"
+# 启动器自身的更新元数据（几十字节的 JSON），与清单分开：
+# 清单管「游戏文件」，这里管「启动器本体」，两者的发布节奏不同。
+LAUNCHER_META_URL = "https://www.cogcraft.top/client/launcher/latest.json"
 MANIFEST_FALLBACK = os.path.join(_HERE, "manifest.example.json")
 
 
@@ -278,6 +285,12 @@ class Api:
         # 界面改为靠轮询 poll() 拿进度，evaluate_js 只作为 Windows 上的即时锦上添花。
         self.progress: dict = {"seq": 0, "kind": None, "data": {}}
         self._log_path = os.path.join(appdata_dir(), "launcher.log")
+        # 文件指纹缓存：size+mtime 未变就不重算 sha1（465MB 每算一遍纯浪费）
+        self._filecache_path = os.path.join(appdata_dir(), "filecache.json")
+        self._filecache = manifest_mod.load_cache(self._filecache_path)
+        # 启动器自更新检查结果（None = 还没查过）
+        self.update: dict | None = None
+        self.update_checking = False
 
     # ── 日志（用户机器上排障用；>512KB 自动轮转）──
     def _log(self, msg: str):
@@ -365,7 +378,13 @@ class Api:
         if mf:
             try:
                 v = manifest_mod.pick_variant(mf, variant_id)
-                plan = manifest_mod.plan_sync(v, self.settings["game_dir"])
+                plan = manifest_mod.plan_sync(v, self.settings["game_dir"],
+                                              cache=self._filecache)
+                if plan.get("hashed"):
+                    # 只有真算过哈希才落盘，避免每次界面刷新都写文件
+                    manifest_mod.save_cache(self._filecache_path,
+                                            str(mf.get("updated") or ""),
+                                            self._filecache)
             except Exception:
                 plan = {}
 
@@ -387,7 +406,13 @@ class Api:
             "pending": {
                 "files": len(plan.get("download") or []),
                 "bytes": plan.get("bytes_needed", 0),
+                "removed": len(plan.get("delete") or []),
+                "verified": len(plan.get("ready") or []),
+                "trusted": plan.get("trusted", 0),
             },
+            "app_version": VERSION,
+            "update": self.update,
+            "update_checking": self.update_checking,
             "server": self.server_choice(),
             "manifest_error": self.manifest_error,
             "offline": bool(mf.get("_offline")),
@@ -420,6 +445,50 @@ class Api:
         """界面侧捕获到的错误写到 launcher.log —— 用户机器上没有控制台。"""
         self._log("[UI] " + str(msg)[:2000])
         return {"ok": True}
+
+    # ── 更新检查 ──
+    def check_updates(self, force: bool = False) -> dict:
+        """检查「启动器本体」和「游戏文件」两侧是否有更新。
+
+        绝不抛异常、绝不阻塞启动：拉不到元数据就是「这次没查到」，
+        界面照常能进游戏。游戏文件那侧的结论直接来自 state() 里的 plan，
+        这里只额外算一份给界面显示的摘要，避免前端自己拼。
+        """
+        if self.update and not force:
+            return self.update
+        res = {"launcher": None, "files": None, "checked_at": int(time.time())}
+        try:
+            self.update_checking = True
+            meta = updater_mod.fetch_meta(LAUNCHER_META_URL)
+            res["launcher"] = updater_mod.check(
+                meta, VERSION, channel=str((self.manifest or {}).get("channel") or "stable"))
+        except Exception as e:
+            res["launcher"] = {"available": False, "current": VERSION,
+                               "error": f"暂时查不到更新（{e}）"}
+            self._log("[update] 检查启动器更新失败: %s" % e)
+        try:
+            mf = self.manifest or {}
+            if mf:
+                v = manifest_mod.pick_variant(mf, self.settings.get("variant"))
+                plan = manifest_mod.plan_sync(v, self.settings["game_dir"],
+                                              cache=self._filecache)
+                res["files"] = {
+                    "changed": len(plan["download"]),
+                    "removed": len(plan["delete"]),
+                    "bytes": plan["bytes_needed"],
+                    "ready": len(plan["ready"]),
+                    "manifest_updated": mf.get("updated") or "",
+                }
+                if plan.get("hashed"):
+                    manifest_mod.save_cache(self._filecache_path,
+                                            str(mf.get("updated") or ""),
+                                            self._filecache)
+        except Exception as e:
+            res["files"] = {"error": str(e)}
+            self._log("[update] 检查游戏文件失败: %s" % e)
+        self.update_checking = False
+        self.update = res
+        return res
 
     # ── 设置修改 ──
     def benchmark(self, force: bool = False) -> dict:

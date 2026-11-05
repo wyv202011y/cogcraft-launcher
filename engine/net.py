@@ -163,6 +163,19 @@ def _tls_ctx(insecure: bool = False) -> ssl.SSLContext:
     return _INSECURE_TLS
 
 
+# nginx 的 keepalive_timeout 是 60s，到点它悄悄关掉空闲连接、我们这边毫无察觉，
+# 下一个请求直接 SSLEOFError。空闲超过这个秒数就主动换新连接，不赌它还活着。
+_IDLE_RECONNECT_SEC = 45.0
+
+
+def _touch_conn(scheme: str, host: str, port: int, insecure: bool = False) -> None:
+    """记一下这个连接最后一次干完活的时间，用来判断空闲了多久。"""
+    used = getattr(_POOL, "used", None)
+    if used is None:
+        used = _POOL.used = {}
+    used[(scheme, host, port, insecure)] = time.time()
+
+
 def _pooled_conn(scheme: str, host: str, port: int, timeout: float,
                  insecure: bool = False):
     """取本线程到该主机的可复用连接。
@@ -174,13 +187,26 @@ def _pooled_conn(scheme: str, host: str, port: int, timeout: float,
     conns = getattr(_POOL, "conns", None)
     if conns is None:
         conns = _POOL.conns = {}
+    used = getattr(_POOL, "used", None)
+    if used is None:
+        used = _POOL.used = {}
     key = (scheme, host, port, insecure)
     c = conns.get(key)
-    if c is None or getattr(c, "sock", None) is None:
+    if c is not None:
+        idle = time.time() - used.get(key, 0.0)
+        if getattr(c, "sock", None) is None or idle > _IDLE_RECONNECT_SEC:
+            try:
+                c.close()
+            except Exception:
+                pass
+            conns.pop(key, None)
+            c = None
+    if c is None:
         cls = http.client.HTTPSConnection if scheme == "https" else http.client.HTTPConnection
         kw = {"context": _tls_ctx(insecure)} if scheme == "https" else {}
         c = cls(host, port, timeout=timeout, **kw)
         conns[key] = c
+        used[key] = time.time()   # 新连接从此刻开始算空闲
     return c
 
 
@@ -242,6 +268,7 @@ def _http_get_stream(url: str, timeout: float, chunk: int, sink,
                 break
             sink(b)
             n += len(b)
+        _touch_conn(scheme, host, port, insecure)
         return n
     except Exception:
         _drop_conn(scheme, host, port)
@@ -298,6 +325,25 @@ def normalize_url(url: str) -> str:
     return urlunsplit((p.scheme, p.netloc, path, query, p.fragment))
 
 
+# 连接层面的偶发中断：对端悄悄关掉 keep-alive、中间设备收尾、响应没读完就断了。
+# 这些重连一次基本就好 —— 重试前 _drop_conn 会把池里的死连接清掉，下一次一定是新连接。
+_TRANSIENT = (
+    ssl.SSLEOFError,          # _ssl.c:2427 —— nginx keepalive_timeout 到点关连接，最常见
+    ssl.SSLZeroReturnError,
+    ssl.SSLSyscallError,
+    ssl.SSLWantReadError,
+    ssl.SSLWantWriteError,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    BrokenPipeError,
+    TimeoutError,
+    socket.timeout,
+    http.client.RemoteDisconnected,
+    http.client.IncompleteRead,
+    http.client.BadStatusLine,
+)
+
+
 def _permanent(err: Exception) -> bool:
     """判断错误是否值得重试。
 
@@ -307,12 +353,26 @@ def _permanent(err: Exception) -> bool:
 
     证书错误同理：链验证失败重试一百次也是失败，只会白等。
     macOS 上就是这一条把「换个源」拖成了好几分钟。
+
+    但注意：ssl.SSLError 是个大类，SSLEOFError（连接被对端关掉）也在里面。
+    以前一刀切把整个 SSLError 当永久错误，结果是每装一次就有几个文件
+    撞上 keep-alive 死连接直接判死、一次都不重试。必须按具体类型分开判。
     """
+    # HTTPError 是 URLError 的子类，必须最先判 —— 它的 .reason 是字符串不是异常，
+    # 若先走下面那个拆包逻辑，404 会被当成字符串里的错误而变成「可重试」，
+    # 又回到「URL 写错时每个文件磨 21 秒」的老坑。
     if isinstance(err, urllib.error.HTTPError):
         return err.code not in (408, 429) and 400 <= err.code < 500
-    if isinstance(err, ssl.SSLError):
+    inner = err
+    if isinstance(err, urllib.error.URLError):
+        reason = getattr(err, "reason", None)
+        if isinstance(reason, BaseException):
+            inner = reason
+    if isinstance(inner, ssl.SSLCertVerificationError):
         return True
-    if isinstance(err, urllib.error.URLError) and isinstance(getattr(err, "reason", None), ssl.SSLError):
+    if isinstance(inner, _TRANSIENT):
+        return False
+    if isinstance(inner, ssl.SSLError):
         return True
     return False
 

@@ -32,6 +32,9 @@ body{
 .chip.up{ padding:4px 10px; border-radius:999px; cursor:pointer; font-weight:600;
   color:#e7bd63; background:#2a2313; border:1px solid #3d3116; }
 .chip.up.must{ color:#ff9c8c; background:#2a1613; border-color:#40201a; }
+/* 更新包已下好，等玩家点一下重启完成更新：绿色=可以动了，不按也能继续用 */
+.chip.up.ready{ color:#9be7a8; background:#12281a; border-color:#1e4030; }
+.chip.up.busy{ cursor:default; opacity:.85; }
 .chip.up:hover{ filter:brightness(1.18); }
 .dot{ width:7px; height:7px; border-radius:50%; background:var(--muted); }
 .dot.ok{ background:var(--ok); box-shadow:0 0 8px #5fb87c88; }
@@ -410,10 +413,13 @@ function hasMethod(name){
   return !!(a && typeof a[name] === 'function');
 }
 async function waitMethod(name, ms){
+  // ⚠️ 不能写 `ms || 20000`：传 0（浏览器预览模式下「别等，直接用 mock」）会被
+  // 当成假值回落成 20 秒，于是每个 API 调用都白卡 20 秒，页面永远停在「正在初始化」。
+  const budget = (typeof ms === 'number' && ms >= 0) ? ms : 20000;
   const t0 = Date.now();
   while (true){
     if (hasMethod(name)) return true;
-    if (Date.now() - t0 > (ms || 20000)) return false;
+    if (Date.now() - t0 > budget) return false;
     await new Promise(r => setTimeout(r, 100));
   }
 }
@@ -546,6 +552,52 @@ function toast(t){
   $('pill').textContent = t;
 }
 
+// ── 启动器自更新：在启动器里下完、换好、自己重启 ──
+// 以前点了只是把浏览器拉起来跳官网，玩家还得自己下包解压覆盖 —— 那一步现在没了。
+let suState = { phase:'idle', pct:0, ready:false, version:'', text:'', error:null };
+let lastUpdate = null;
+let suFastTimer = null;
+
+async function refreshSelfUpdate(){
+  try { const s = await api.get_update_progress(); if (s) suState = s; } catch (e) {}
+  if (lastUpdate) renderUpdate(lastUpdate);
+}
+
+// 下载时进度要跟得上，20 秒一次太钝；只在下载/解包期间加速，完了自动停
+function suFastLoop(){
+  if (suFastTimer) return;
+  suFastTimer = setInterval(async () => {
+    await refreshSelfUpdate();
+    const ph = (suState || {}).phase;
+    if (ph !== 'downloading' && ph !== 'unpacking'){
+      clearInterval(suFastTimer); suFastTimer = null;
+    }
+  }, 600);
+}
+
+async function doPrepareUpdate(){
+  try {
+    const r = await api.prepare_update();
+    if (r && r.ok){ toast('正在下载更新…'); suFastLoop(); return; }
+    // 这台机器没法自更新（还在 dmg 里、目录不可写…）：说清原因并给手动下载
+    toast((r && r.error) || '这台机器无法自动更新');
+    if (r && r.fallback){ try { await api.open_download_page(); } catch (e) {} }
+  } catch (e) { toast('准备更新失败：' + e); }
+}
+
+async function doApplyUpdate(){
+  try {
+    const r = await api.apply_update();
+    if (r && r.ok){ toast('正在重启完成更新…'); return; }
+    toast((r && r.error) || '无法完成更新，请稍后重试或到官网手动下载');
+  } catch (e) { toast('更新失败：' + e); }
+}
+
+function retrySelfUpdate(){
+  suState = { phase:'idle', pct:0, ready:false, version:'', text:'', error:null };
+  doPrepareUpdate();
+}
+
 // ── 更新提示胶囊：启动器本体 + 服务器下发的游戏文件，两种都走这一处 ──
 function renderUpdate(u){
   const chip = $('upChip');
@@ -554,17 +606,64 @@ function renderUpdate(u){
   const F = (u && u.files) || {};
   const filesPending = (Number(F.changed) || 0) + (Number(F.removed) || 0);
 
-  // ① 启动器本体有新版本：优先级最高，点开去官网
+  // ① 启动器本体有新版本：点一下就在启动器内下载、替换自己、自动重启，
+  //    不再把人踢去浏览器手动下包（那一步正是玩家最烦的）。
+  chip.classList.remove('ready', 'busy');
   if (L.available){
+    const su = suState || {};
+    const sameVer = su.version && L.latest && su.version === L.latest;
+
+    // 正在重启换包：别再让人点
+    if (su.phase === 'applying'){
+      chip.hidden = false;
+      chip.classList.add('busy');
+      chip.textContent = '⟳ 正在重启…';
+      chip.title = '启动器正在退出并替换文件，完成后会自动打开';
+      chip.onclick = null;
+      return;
+    }
+
+    // 包已就绪：绿胶囊，点一下重启完成更新
+    if (su.ready && sameVer){
+      chip.hidden = false;
+      chip.classList.add('ready');
+      chip.textContent = '⟳ 重启完成更新';
+      chip.title = '新版本 ' + (su.version || '') + ' 已下载并校验通过，点一下重启完成更新。'
+                 + '你的设置、存档路径、证书都会保留。';
+      chip.onclick = doApplyUpdate;
+      return;
+    }
+
+    // 下载/解包中：把进度画在胶囊上
+    if (su.phase === 'downloading' || su.phase === 'unpacking'){
+      chip.hidden = false;
+      chip.classList.add('busy');
+      const pct = Math.max(0, Math.min(100, Math.round((Number(su.pct) || 0) * 100)));
+      chip.textContent = (su.phase === 'unpacking' ? '⟳ 解包 ' : '↓ ') + pct + '%';
+      chip.title = su.text || '正在准备更新';
+      chip.onclick = null;
+      return;
+    }
+
+    // 失败过：明说失败，并给手动下载的退路
+    if (su.phase === 'failed'){
+      chip.hidden = false;
+      chip.classList.toggle('must', !!L.mandatory);
+      chip.textContent = '↑ 自动更新失败，点此手动下载';
+      chip.title = (su.error || '') + '（也可以稍后再点一次重试）';
+      chip.onclick = () => { retrySelfUpdate(); };
+      return;
+    }
+
+    // 默认：点一下开始下载
+    const mb = Math.round((Number((L.pkg || {}).size) || 0) / 1048576);
     chip.hidden = false;
     chip.classList.toggle('must', !!L.mandatory);
     chip.textContent = (L.mandatory ? '↑ 必须更新到 ' : '↑ 有新版本 ') + (L.latest || '');
-    chip.title = L.notes ? L.notes
-      : ('当前 ' + (L.current || '') + ' → 最新 ' + (L.latest || '') + '，点此去官网下载');
-    chip.onclick = async () => {
-      try { const r = await api.open_download_page(); if (r && r.url) toast('已打开下载页：' + r.url); }
-      catch (e) { toast('请手动打开 www.cogcraft.top 下载新版启动器'); }
-    };
+    chip.title = '点一下在启动器内直接更新'
+               + (mb ? ('（约 ' + mb + 'MB）') : '')
+               + '：下载 → 校验 → 重启完成，不用去官网手动下包';
+    chip.onclick = doPrepareUpdate;
     return;
   }
 
@@ -593,13 +692,14 @@ async function checkUpdatesOnBoot(){
     let finished = false;
     try {
       const u = await api.get_update();
-      if (u && u.update){ renderUpdate(u.update); finished = !u.checking; }
+      if (u && u.update){ lastUpdate = u.update; renderUpdate(u.update); finished = !u.checking; }
     } catch (e) { break; }
     if (finished) break;
   }
   setInterval(async () => {
-    try { const u = await api.get_update(); if (u && u.update) renderUpdate(u.update); }
+    try { const u = await api.get_update(); if (u && u.update) lastUpdate = u.update; }
     catch (e) {}
+    await refreshSelfUpdate();        // 内部会把 lastUpdate 重新画一遍（含自更新进度）
   }, 20000);
 }
 
@@ -1207,7 +1307,26 @@ function realApi(HWD){
     poll: async () => ({seq:0, kind:null, data:{}}),
     check_updates_async: async () => ({ok:true}),
     get_update: async () => ({checking:false, update:null}),
-    open_download_page: async () => ({ok:true, url:'https://www.cogcraft.top/#download'})
+    open_download_page: async () => ({ok:true, url:'https://www.cogcraft.top/#download'}),
+    // 自更新：浏览器里没法替换自己，默认回「环境不支持」走手动下载；
+    // 具体状态由 window.__SU 驱动，好让界面这些分支能被自动测试覆盖
+    update_capability: async () => clone((window.__SU || {}).capability
+      || {ok:false, reason:'浏览器预览模式不支持自动更新',
+          fallback_url:'https://www.cogcraft.top/#download'}),
+    prepare_update: async () => {
+      const su = (window.__SU = window.__SU || {});
+      su.prepareCalls = (su.prepareCalls || 0) + 1;
+      return clone(su.prepareResult || {ok:false, fallback:true,
+        reason:'浏览器预览模式不支持自动更新',
+        fallback_url:'https://www.cogcraft.top/#download'});
+    },
+    get_update_progress: async () => clone((window.__SU || {}).progress
+      || {phase:'idle', pct:0, ready:false, version:'', error:null}),
+    apply_update: async () => {
+      const su = (window.__SU = window.__SU || {});
+      su.applyCalls = (su.applyCalls || 0) + 1;
+      return clone(su.applyResult || {ok:false, error:'浏览器预览模式不支持自动更新'});
+    }
   };
 }
 

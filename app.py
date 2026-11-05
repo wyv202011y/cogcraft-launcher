@@ -31,11 +31,12 @@ import manifest as manifest_mod  # noqa: E402
 import pipeline as pipeline_mod  # noqa: E402
 import bench as bench_mod  # noqa: E402
 import updater as updater_mod  # noqa: E402
+import selfupdate as selfupdate_mod  # noqa: E402
 
 APP_NAME = "cogcraft"
 # 版本号唯一来源：CI 打包时从这里读，发版脚本也从这里读。
 # 改版本 = 改这一行，别在别处再写一份。
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 MANIFEST_URL = "https://www.cogcraft.top/client/manifest.json"
 # 启动器自身的更新元数据（几十字节的 JSON），与清单分开：
 # 清单管「游戏文件」，这里管「启动器本体」，两者的发布节奏不同。
@@ -298,6 +299,11 @@ class Api:
         # 定时轮询线程的刹车（窗口关掉时 set 一下让它尽快退出）
         self._watch_stop = threading.Event()
         self._watch_thread: threading.Thread | None = None
+        # 启动器自更新（下载 → 解压 → 替换自身）的进度状态。
+        # phase: idle / downloading / unpacking / ready / applying / failed
+        self.su_state: dict = {"phase": "idle", "pct": 0.0, "text": "", "ready": False,
+                               "version": "", "error": None}
+        self._su_thread: threading.Thread | None = None
 
     # ── 日志（用户机器上排障用；>512KB 自动轮转）──
     def _log(self, msg: str):
@@ -346,6 +352,10 @@ class Api:
             java = None
         self.hw = hardware.detect(java)
         self._refresh_manifest_sync()
+        # 走到这里说明界面已经加载、JS↔Python 桥通了 —— 这才是「这版真的能用」。
+        # 上一轮如果是在自更新，接手脚本正等着这个标记来判断要不要回滚，
+        # 所以必须放在界面真正起来之后写，不能放进程启动那一瞬间。
+        selfupdate_mod.write_start_marker(userdata_dir(), VERSION)
         return self.state()
 
     def _refresh_manifest_sync(self):
@@ -562,6 +572,100 @@ class Api:
                                               name="update-watch")
         self._watch_thread.start()
         return {"ok": True, "interval": WATCH_INTERVAL_SEC}
+
+    # ────────────── 启动器自更新：下载 → 解压 → 替换自身 ──────────────
+    def update_capability(self) -> dict:
+        """界面先问一句「这台机器能不能自动更新」。
+
+        不能的时候必须把原因原样告诉玩家（常见：还在 dmg 里、目录不可写），
+        而不是等点了更新再失败 —— 那种体验比没有这个功能还糟。
+        """
+        pf = selfupdate_mod.preflight()
+        out = {"ok": bool(pf.get("ok")), "reason": pf.get("reason") or ""}
+        if not out["ok"]:
+            out["fallback_url"] = "https://www.cogcraft.top/#download"
+        return out
+
+    def prepare_update(self) -> dict:
+        """点「更新」：后台下载 + 解压。立刻返回，进度靠 get_update_progress 轮询。"""
+        la = ((self.update or {}).get("launcher") or {})
+        pkg = la.get("pkg")
+        if not pkg:
+            return {"ok": False, "error": "没有可用的更新包"}
+        pf = selfupdate_mod.preflight()
+        if not pf.get("ok"):
+            return {"ok": False, "error": pf.get("reason") or "当前环境不支持自动更新",
+                    "fallback": True, "fallback_url": "https://www.cogcraft.top/#download"}
+        if self._su_thread and self._su_thread.is_alive():
+            return {"ok": True, "already": True}
+        self.su_state = {"phase": "downloading", "pct": 0.0, "text": "准备下载…",
+                         "ready": False, "version": str(la.get("latest") or ""),
+                         "error": None}
+        self.emit("selfupdate", dict(self.su_state))
+        self._su_thread = self._run_bg(self._prepare_update_worker, pkg,
+                                       str(la.get("latest") or ""))
+        return {"ok": True}
+
+    def _prepare_update_worker(self, pkg: dict, version: str) -> None:
+        def setp(phase: str, pct: float, text: str):
+            self.su_state.update({"phase": phase, "pct": round(pct, 3), "text": text})
+            self.emit("selfupdate", dict(self.su_state))
+
+        zip_path = ""
+        try:
+            root = selfupdate_mod.install_root()
+            dl = selfupdate_mod.download_dir(root)
+
+            def prog(pct: float, text: str):
+                setp("downloading", float(pct) * 0.88, text)   # 下载占前 88%
+
+            zip_path = updater_mod.download_pkg(pkg, dl, progress=prog)
+            setp("unpacking", 0.92, "解开更新包…")
+            selfupdate_mod.unpack(zip_path, root)
+            try:
+                os.remove(zip_path)          # 60MB 的包别留在玩家盘上
+            except OSError:
+                pass
+            self.su_state.update({"phase": "ready", "pct": 1.0, "ready": True,
+                                  "text": f"新版本 {version} 已就绪", "error": None})
+            self._log(f"[selfupdate] 更新包已就绪: {version}")
+        except Exception as e:
+            self.su_state.update({"phase": "failed", "ready": False, "error": str(e),
+                                  "text": f"准备更新失败：{e}"})
+            self._log(f"[selfupdate] 准备失败: {e}")
+        self.emit("selfupdate", dict(self.su_state))
+
+    def get_update_progress(self) -> dict:
+        """纯读自更新进度，不联网 —— 跟 get_update 一个道理。"""
+        return dict(self.su_state)
+
+    def apply_update(self) -> dict:
+        """点「立即重启更新」：写接手脚本 → 拉起来 → 本进程退出。
+
+        这里绝不自己做替换：进程没法安全地替换自己（Windows 会锁文件，
+        macOS 上正在用的资源在 app 内部）。交给外部脚本，它等我们退出后再动手。
+        """
+        st = dict(self.su_state)
+        if not st.get("ready"):
+            return {"ok": False, "error": "更新包还没准备好"}
+        pf = selfupdate_mod.preflight()
+        if not pf.get("ok"):
+            return {"ok": False, "error": pf.get("reason") or "当前环境不支持自动更新"}
+        try:
+            # 状态目录必须用「app 外面」的那个：macOS 的数据在 app 内部，
+            # 换包时会被搬走/覆盖，日志和启动标记放里面会丢。
+            script, argv = selfupdate_mod.build_script(
+                pf["root"], userdata_dir(), str(st.get("version") or ""), pid=os.getpid())
+            selfupdate_mod.spawn_script(script, argv)
+        except Exception as e:
+            self._log(f"[selfupdate] 拉起更新脚本失败: {e}")
+            return {"ok": False, "error": str(e)}
+        self.su_state.update({"phase": "applying", "text": "正在重启完成更新…"})
+        self.emit("selfupdate", dict(self.su_state))
+        self._log(f"[selfupdate] 已交给接手脚本 {script}，本进程退出")
+        # 给界面 1 秒把提示画出来，然后硬退出（不跑 atexit，别让清理逻辑拖住脚本）
+        threading.Timer(1.0, lambda: os._exit(0)).start()
+        return {"ok": True, "restarting": True}
 
     def open_download_page(self) -> dict:
         """打开官网客户端下载页（启动器有新版本时用）。"""
@@ -831,6 +935,14 @@ def main():
     # 老版本把数据放在用户目录，新版本搬进 .app：只做一次，失败也只是继续用老位置
     mig = migrate_legacy_data()
     api = Api()
+    # 上一轮自更新留下的残局：没装成的下载包、没删掉的旧版本备份，启动时清掉。
+    # （新版起得来，脚本本该自己删备份；进程被强杀之类的意外会留下垃圾）
+    try:
+        gone = selfupdate_mod.cleanup_leftovers()
+        if gone:
+            api._log("[selfupdate] 清理上次更新的残留: " + "; ".join(gone))
+    except Exception as e:
+        api._log(f"[selfupdate] 清理残留失败（不影响使用）: {e}")
     if mig:
         api._log(f"[migrate] {mig} → 数据目录 {appdata_dir()}")
     # 每次启动都查一遍（用户要求）：丢后台，桥和界面都不等它

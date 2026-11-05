@@ -35,7 +35,7 @@ import updater as updater_mod  # noqa: E402
 APP_NAME = "cogcraft"
 # 版本号唯一来源：CI 打包时从这里读，发版脚本也从这里读。
 # 改版本 = 改这一行，别在别处再写一份。
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 MANIFEST_URL = "https://www.cogcraft.top/client/manifest.json"
 # 启动器自身的更新元数据（几十字节的 JSON），与清单分开：
 # 清单管「游戏文件」，这里管「启动器本体」，两者的发布节奏不同。

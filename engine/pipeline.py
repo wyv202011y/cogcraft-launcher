@@ -96,25 +96,33 @@ class Pipeline:
 
     # ────────── 安装器下载（多源 + 内容哈希） ──────────
 
-    def _installer_sources(self) -> list[str]:
-        """安装器候选源，按优先级排。
+    def _installer_sources(self) -> list[tuple[str, float]]:
+        """安装器候选源 + 各自的超时秒数，按优先级排。
 
         国内三种网络环境都会踩：① 系统根证书缺失（macOS 冻结包）
         ② 运营商插自签证书劫持 ③ 镜像站自己证书链不完整。所以不能只写死一个源。
+
+        **每个源必须带自己的超时**：官方 maven.neoforged.net 在国内是黑洞式超时
+        （实测 25 秒连 TCP 都不回），以前三个源各 120 秒 × 重试 3 次 = 最坏 18 分钟
+        全部耗在等超时上，界面上就永远停在「获取安装器… 2%」。
+        自托管源排第一：清单里有 installer_url 时它就是我们的站点，最稳。
         """
         mf = self.mf.get("modloader") or {}
         v = self.loader_version
+        mirror_path = f"maven/net/neoforged/neoforge/{v}/neoforge-{v}-installer.jar"
         cands = [
-            (mf.get("installer_url") or "").strip(),
-            f"{BMCLAPI}/neoforge/version/{v}/installer",
-            f"https://maven.neoforged.net/releases/net/neoforged/neoforge/{v}"
-            f"/neoforge-{v}-installer.jar",
+            ((mf.get("installer_url") or "").strip(), 60.0),      # 清单指定（自托管优先）
+            (f"https://bmclapi2.bangbang93.com/{mirror_path}", 30.0),
+            (f"https://mirrors.hit.edu.cn/bmclapi/{mirror_path}", 30.0),   # bmclapi2 的重定向落点
+            (f"https://bmclapi.bangbang93.com/{mirror_path}", 30.0),       # 老域名，偶尔更快
+            (f"https://maven.neoforged.net/releases/net/neoforged/neoforge/{v}"
+             f"/neoforge-{v}-installer.jar", 15.0),                        # 官方，放最后且不留恋
         ]
         seen, out = set(), []
-        for u in cands:
+        for u, tmo in cands:
             if u and u not in seen:
                 seen.add(u)
-                out.append(u)
+                out.append((u, tmo))
         return out
 
     def _fetch_installer(self, dest: str) -> str:
@@ -127,15 +135,15 @@ class Pipeline:
         import net
         want = str((self.mf.get("modloader") or {}).get("installer_sha1") or "").strip().lower()
         errs: list[str] = []
-        for url in self._installer_sources():
+        for url, tmo in self._installer_sources():
             host = url.split("/")[2] if "//" in url else url
             # 有哈希才允许「降级跳过证书校验」这一档
-            modes = [(False, 3)] + ([(True, 1)] if want else [])
+            modes = [(False, 2)] + ([(True, 1)] if want else [])
             for insecure, tries in modes:
                 tag = host + ("（跳过证书校验，靠 sha1 兜底）" if insecure else "")
                 try:
                     self._emit(Step.LOADER, 0.02, f"获取安装器… {host}")
-                    _download(url, dest, insecure=insecure, retries=tries)
+                    _download(url, dest, timeout=tmo, insecure=insecure, retries=tries)
                     if want:
                         got = net.sha1_of_file(dest)
                         if got != want:

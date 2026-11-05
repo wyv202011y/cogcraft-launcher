@@ -35,7 +35,7 @@ import updater as updater_mod  # noqa: E402
 APP_NAME = "cogcraft"
 # 版本号唯一来源：CI 打包时从这里读，发版脚本也从这里读。
 # 改版本 = 改这一行，别在别处再写一份。
-VERSION = "1.0.5"
+VERSION = "1.0.6"
 MANIFEST_URL = "https://www.cogcraft.top/client/manifest.json"
 # 启动器自身的更新元数据（几十字节的 JSON），与清单分开：
 # 清单管「游戏文件」，这里管「启动器本体」，两者的发布节奏不同。
@@ -488,7 +488,40 @@ class Api:
             self._log("[update] 检查游戏文件失败: %s" % e)
         self.update_checking = False
         self.update = res
+        self.emit("update", res)      # 界面轮询 get_update 也能拿到，双保险
         return res
+
+    def get_update(self) -> dict:
+        """纯读上一次的检查结果 —— 不发起任何网络请求，界面轮询它绝不会卡。"""
+        return {"checking": bool(self.update_checking), "update": self.update}
+
+    def check_updates_async(self, force: bool = False) -> dict:
+        """界面启动时调这个：真检查丢后台线程，立刻返回。
+
+        直接 await check_updates() 会卡住 JS→Python 桥（串行），
+        网络慢的时候界面就整段无响应 —— 所以启动前的检查必须是异步的。
+        """
+        if self.update and not force:
+            return {"ok": True, "cached": True}
+        if not self.update_checking:
+            self._run_bg(lambda: self._safe_check_updates(force))
+        return {"ok": True, "pending": True}
+
+    def _safe_check_updates(self, force: bool = True) -> None:
+        try:
+            self.check_updates(force=force)
+        except Exception as e:                     # 检查更新绝不影响启动
+            self._log("[update] 后台检查异常: %s" % e)
+
+    def open_download_page(self) -> dict:
+        """打开官网客户端下载页（启动器有新版本时用）。"""
+        import webbrowser
+        url = "https://www.cogcraft.top/#download"
+        try:
+            webbrowser.open(url)
+            return {"ok": True, "url": url}
+        except Exception as e:
+            return {"ok": False, "url": url, "error": str(e)}
 
     # ── 设置修改 ──
     def benchmark(self, force: bool = False) -> dict:
@@ -750,6 +783,8 @@ def main():
     api = Api()
     if mig:
         api._log(f"[migrate] {mig} → 数据目录 {appdata_dir()}")
+    # 每次启动都查一遍（用户要求）：丢后台，桥和界面都不等它
+    api._run_bg(lambda: api._safe_check_updates(True))
     ui = os.path.join(_HERE, "ui", "index.html")
     win = webview.create_window(
         "cogcraft", f"file://{ui}",

@@ -111,7 +111,11 @@ class Pipeline:
         v = self.loader_version
         mirror_path = f"maven/net/neoforged/neoforge/{v}/neoforge-{v}-installer.jar"
         cands = [
-            ((mf.get("installer_url") or "").strip(), 60.0),      # 清单指定（自托管优先）
+            # 清单指定的地址（现阶段是 bmclapi2 这类公共 CDN）。
+            # ⚠️ 别往清单里写我们自己的站点：安装器是官方产物，CDN 上到处都有，
+            #    几十 MB × 全体玩家首装，全压在 HK2 上是纯浪费 —— 实测 CDN 5.8MB/s、
+            #    我们站点 0.6MB/s，还白占带宽。
+            ((mf.get("installer_url") or "").strip(), 60.0),
             (f"https://bmclapi2.bangbang93.com/{mirror_path}", 30.0),
             (f"https://mirrors.hit.edu.cn/bmclapi/{mirror_path}", 30.0),   # bmclapi2 的重定向落点
             (f"https://bmclapi.bangbang93.com/{mirror_path}", 30.0),       # 老域名，偶尔更快

@@ -36,8 +36,8 @@ body{
 .iconbtn{ width:30px; height:30px; border-radius:8px; border:none; background:transparent;
   color:var(--muted2); cursor:pointer; display:flex; align-items:center; justify-content:center; }
 .iconbtn:hover{ background:#181c22; color:var(--fg2); }
-.winbtns{ display:flex; gap:9px; margin-left:6px; }
-.winbtns i{ width:11px; height:11px; border-radius:50%; background:#2a3038; display:block; }
+.iconbtn.on{ background:#1d232b; color:var(--fg2); }   /* 面板打开时按钮跟着亮，让开合有反馈 */
+.iconbtn svg{ display:block; }
 
 /* ── 主区 ── */
 .main{ flex:1; display:flex; flex-direction:column; align-items:center;
@@ -148,6 +148,10 @@ input[type=text]:focus{ border-color:#2f4a7a; }
   border-top:1px solid var(--line); }
 .mono{ font-family:"JetBrains Mono",Consolas,monospace; }
 .hidden{ display:none !important; }
+/* HTML 的 hidden 属性必须真能藏住元素：浏览器默认的 [hidden]{display:none}
+   优先级最低，会被 .chip{display:flex} 这类类选择器盖掉，于是没更新时
+   也会渲染出一个空的黄色胶囊。这里显式兜底。 */
+[hidden]{ display:none !important; }
 
 /* ── 下载详情：步骤清单 ── */
 .hero{ display:flex; flex-direction:column; align-items:center; }

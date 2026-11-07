@@ -10,7 +10,11 @@ $('btnMain').onclick = async () => {
   if (r && r.ok === false) { toast(r.error); } else { startPolling(); }
 };
 
-$('btnSettings').onclick = () => $('panel').classList.add('on');
+// 同一个按钮开、也同一个按钮关：只 add 不 remove 的话，第二次点等于没点
+$('btnSettings').onclick = () => {
+  const on = $('panel').classList.toggle('on');
+  $('btnSettings').classList.toggle('on', on);   // 按钮自身也跟着亮/灭
+};
 $('btnOnboard').onclick = () => { $('panel').classList.remove('on'); openWizard(); };
 $('btnClosePanel').onclick = () => $('panel').classList.remove('on');
 $('btnReset').onclick = async () => {

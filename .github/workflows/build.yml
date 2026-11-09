@@ -10,34 +10,42 @@ on:
     tags: ['v*']
 
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: windows-latest
-            arch: x64
-            label: windows-x64
-          - runner: macos-14
-            arch: arm64
-            label: macos-arm64
-    runs-on: ${{ matrix.runner }}
+  build-windows:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
       - name: Build
-        run: python ci/build.py ${{ matrix.arch }}
+        run: python ci/build.py x64
       - uses: actions/upload-artifact@v4
         with:
-          name: cogcraft-${{ matrix.label }}
+          name: cogcraft-windows-x64
+          path: dist/cogcraft-*.zip
+          retention-days: 30
+
+  # GitHub-hosted macOS runner 平台侧故障（2026-11 起分不到机器，job 1 秒被 cancelled）。
+  # 保留等恢复，但 release 绝不能依赖它 —— 否则 Windows 明明成功也会被它卡住发不出去。
+  build-macos:
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build
+        run: python ci/build.py arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cogcraft-macos-arm64
           path: dist/cogcraft-*.zip
           retention-days: 30
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: build-windows
     runs-on: ubuntu-latest
     permissions:
       contents: write

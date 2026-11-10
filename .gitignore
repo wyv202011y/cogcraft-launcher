@@ -14,3 +14,6 @@ data/
 
 # 拆分前的单文件备份
 ui/index.html.bak_before_*
+
+# macOS 在非 APFS 卷上生成的 AppleDouble 伴生文件
+._*

@@ -16,6 +16,7 @@
 from __future__ import annotations
 import os
 import shutil
+import ssl
 import sys
 import tarfile
 import tempfile
@@ -36,6 +37,25 @@ JAVA_NAMES = ("java", "java.exe")
 UA = "cogcraft-launcher-ci/1.0 (+https://github.com/wyv202011y/cogcraft-launcher)"
 
 
+def _ssl_context() -> ssl.SSLContext:
+    """优先用 certifi 带的根证书。
+
+    macOS 上 python.org 的安装包不会自动跑 Install Certificates.command，
+    系统默认 CA 是空的，urllib 直接报
+    "unable to get local issuer certificate (_ssl.c:1028)"。
+    本项目的打包流程本来就依赖 certifi（PyInstaller 要 --collect-data certifi，
+    冻结包下载也用它当根证书），所以直接拿它当 CA 源，用户不必手动装证书。
+    """
+    try:
+        import certifi
+        cafile = certifi.where()
+        if os.path.exists(cafile):
+            return ssl.create_default_context(cafile=cafile)
+    except Exception:
+        pass
+    return ssl.create_default_context()
+
+
 def download(url: str, dest: str, tries: int = 3) -> None:
     for i in range(1, tries + 1):
         try:
@@ -43,7 +63,9 @@ def download(url: str, dest: str, tries: int = 3) -> None:
             # 必须带自己的 User-Agent：urllib 默认的 "Python-urllib/3.x"
             # 会被 Adoptium → GitHub release 的链路直接 403（curl 就不会）
             req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=180) as r, open(dest, "wb") as f:
+            with urllib.request.urlopen(
+                    req, timeout=180, context=_ssl_context()) as r, \
+                    open(dest, "wb") as f:
                 shutil.copyfileobj(r, f)
             print(f"  已保存 {os.path.getsize(dest) / 1048576:.1f} MB", flush=True)
             return

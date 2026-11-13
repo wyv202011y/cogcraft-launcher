@@ -242,6 +242,7 @@ def plan_sync(variant: dict, game_dir: str, verify_hash: bool = True,
     bytes_needed = 0
     hashed = 0
     trusted = 0
+    errors: list = []   # 校验读文件失败的文件，记下来供上层写日志
 
     for f in variant.get("files", []):
         rel = f["path"].lstrip("/").replace("\\", "/")
@@ -276,8 +277,13 @@ def plan_sync(variant: dict, game_dir: str, verify_hash: bool = True,
             try:
                 got = _sha1_file(dest)
                 hashed += 1
-            except Exception:
+            except Exception as e:
+                # 读不出来就说明这份文件不可信，必须重下 —— 而且要把它的大小一起
+                # 计入 bytes_needed。漏了这一步，界面就会出现
+                # 「开始准备（15 个文件）」配「需要下载 0 MB」这种自相矛盾的提示。
+                errors.append("%s: %s" % (rel, e))
                 download.append(f)
+                bytes_needed += int(f.get("size") or 0)
                 continue
             if got != want_sha:
                 download.append(f)
@@ -295,4 +301,5 @@ def plan_sync(variant: dict, game_dir: str, verify_hash: bool = True,
             delete.append(rel)
 
     return {"download": download, "ready": ready, "delete": delete,
-            "bytes_needed": bytes_needed, "hashed": hashed, "trusted": trusted}
+            "bytes_needed": bytes_needed, "hashed": hashed, "trusted": trusted,
+            "errors": errors}

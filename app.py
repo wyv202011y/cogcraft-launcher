@@ -411,6 +411,16 @@ class Api:
         except Exception:
             java, using_bundled = None, False
 
+        # 校验时读不出来的文件会被判成「要重下」，此时界面可能出现
+        # 「开始准备（N 个文件）」配「需要下载 0 MB」这种自相矛盾的组合。
+        # 把具体文件名写进日志，否则下次再遇到只能靠猜。只记一次，
+        # 避免每次 bootstrap 刷新都往日志里灌一遍。
+        plan_errors = plan.get("errors") or []
+        if plan_errors and not getattr(self, "_plan_errors_logged", False):
+            self._plan_errors_logged = True
+            self._log("[plan] %d 个文件校验读取失败，已按需重下：%s"
+                      % (len(plan_errors), " ; ".join(plan_errors[:8])))
+
         return {
             "hardware": self.hw,
             "hardware_text": self._describe_safe(hw),

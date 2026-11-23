@@ -276,3 +276,108 @@ input[type=text]:focus{ border-color:#2f4a7a; }
   gap:10px; border-top:1px solid var(--line); }
 .wfoot .btn{ margin-top:0; width:180px; height:46px; font-size:14px; }
 .wfoot .btn.sub{ width:104px; height:46px; }
+
+
+/* ── 登录 / 注册（引导第 2 步）──────────────────
+   宽度压在 400px：比昵称步的 560px 窄，两个输入框横着拉满会显得很空。 */
+.wform{ width:100%; max-width:400px; margin:0 auto; display:flex; flex-direction:column; gap:10px; }
+.wform input{ width:100%; background:var(--bg2); border:1px solid var(--line); border-radius:10px;
+  color:var(--fg); font-size:14px; padding:12px 15px; outline:none;
+  transition:border-color .15s; font-family:inherit; }
+.wform input:focus{ border-color:#33528c; }
+.wform input::placeholder{ color:#3f4855; }
+
+.wform-err{ max-width:400px; width:100%; margin:9px auto 0; font-size:12px; color:#e06c6c;
+  min-height:16px; opacity:0; transition:opacity .15s; }
+.wform-err.on{ opacity:1; }
+
+.wlink{ display:inline-block; margin:16px auto 0; font-size:12.5px; color:#6fa0ff;
+  cursor:pointer; border-bottom:1px dashed rgba(111,160,255,.35); padding-bottom:1px;
+  align-self:center; }
+.wlink:hover{ color:#4f7cff; border-bottom-color:rgba(79,124,255,.5); }
+
+/* 已登录卡片 */
+.acct-card{ display:flex; align-items:center; gap:13px; background:var(--bg2);
+  border:1px solid var(--line); border-radius:14px; padding:15px 19px;
+  max-width:400px; width:100%; margin:0 auto; }
+.acct-card .av{ width:38px; height:38px; border-radius:50%; flex:none;
+  background:linear-gradient(135deg,#4f7cff,#6fa0ff);
+  display:grid; place-items:center; font-size:15px; font-weight:700; color:#fff; }
+.acct-meta{ text-align:left; min-width:0; }
+.acct-name{ font-size:14.5px; font-weight:600; color:var(--fg);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.acct-sub{ font-size:11.5px; color:var(--muted); margin-top:3px; }
+
+
+/* ── 账号胶囊 ──
+   ⚠️ button 的浏览器默认 background/border 必须显式清掉：.chip 基类只写了 flex，
+   而 .chip.up 那类自己有背景色，所以只有这颗会露出一块白底，在深色界面里很扎眼。 */
+.chip.acct{ background:none; border:0; padding:0; margin:0;
+  cursor:pointer; color:var(--fg); font-family:inherit; transition:opacity .14s; }
+.chip.acct:hover{ opacity:.82; }
+.chip.acct .av{ width:18px; height:18px; border-radius:50%; flex:none;
+  background:linear-gradient(135deg,#4f7cff,#6fa0ff);
+  display:grid; place-items:center;
+  font-size:10px; font-weight:700; color:#fff; line-height:1; }
+
+/* ── 绑定 QQ 大板块（引导第 3 步）──
+   一个 6 位码占满整个版面，玩家不用在群里翻聊天记录找。 */
+.bindarea{ margin-top:22px; }
+.bindwait{ font-size:13px; color:var(--muted); padding:28px 0; text-align:center; }
+.binderr{ font-size:13px; color:#e06c6c; padding:14px 0; line-height:1.6; }
+
+.bindbig{ background:var(--bg2); border:1px solid var(--line2); border-radius:16px;
+  padding:28px 24px 24px; text-align:center; }
+.bindbig-lbl{ font-size:12px; color:var(--muted); letter-spacing:.03em; }
+.bindbig-code{ margin-top:15px; font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:40px; font-weight:700; letter-spacing:.03em; color:#8fb2ff; line-height:1.15;
+  user-select:all; -webkit-user-select:all; }
+.bindbig-cd{ margin-top:13px; font-size:12.5px; color:#4d5563; }
+
+.bindops{ display:flex; gap:10px; margin-top:16px; }
+.bindops .btn{ flex:1; }
+
+.bindskip{ margin-top:22px; text-align:center; }
+.bindskip a{ font-size:12.5px; color:var(--muted); cursor:pointer;
+  border-bottom:1px dashed rgba(92,100,114,.45); padding-bottom:1px; transition:color .14s; }
+.bindskip a:hover{ color:#8b95a4; }
+
+/* 已绑定 */
+.binddone{ background:rgba(95,184,124,.06); border:1px solid rgba(95,184,124,.26);
+  border-radius:16px; padding:34px 24px; text-align:center; }
+.binddone-ok{ width:46px; height:46px; margin:0 auto; border-radius:50%;
+  background:rgba(95,184,124,.14); color:#5fb87c;
+  font-size:23px; font-weight:700; display:grid; place-items:center; }
+.binddone-t{ margin-top:15px; font-size:16px; font-weight:600; color:var(--fg); }
+.binddone-s{ margin-top:7px; font-size:12.5px; color:var(--muted); }
+
+
+/* ── 账号面板（全屏，与设置面板同一形态）── */
+#acctPanel .pbody{ display:block; }
+#acctPanel .col{ max-width:560px; margin:0 auto; }
+/* ── 官网入口（Phase 3）── */
+/* ♥ 只在清单配了 donate 时出现（script 里控制 hidden），hover 变红点明是爱心 */
+.iconbtn.heart:hover{ color:var(--err); }
+.plinks{ padding:6px 0 18px; }
+.plinks > span{ display:flex; flex-wrap:wrap; gap:14px; }
+/* 账号面板里跟 .col 对齐同宽，别左伸到边上 */
+#acctPanel .plinks{ max-width:560px; margin:0 auto; width:100%; box-sizing:border-box; }
+.plinks.about{ padding:2px 0 0; }
+.plinks.about > span{ gap:10px 18px; }
+.plink{ font-size:11.5px; color:var(--muted); cursor:pointer; text-decoration:none;
+  border-bottom:1px solid transparent; transition:color .12s, border-bottom-color .12s; }
+.plink:hover{ color:var(--accent2); border-bottom-color:var(--accent2); }
+/* 一条链接都没配时整块不占高度（用户反感空占地方） */
+.plinks:empty{ display:none; }
+
+
+.acct-id{ font-size:20px; font-weight:640; color:var(--fg); margin-top:9px; }
+.acct-uuid{ margin-top:6px; font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:11px; color:#3f4855; word-break:break-all; }
+
+.acct-bindrow{ display:flex; align-items:center; gap:10px; margin-top:10px; }
+.acct-bindrow .dot{ width:7px; height:7px; flex:none; }
+.acct-bindrow .t{ font-size:13.5px; color:var(--fg); }
+.acct-bindrow .s{ font-size:11.5px; color:var(--muted); margin-left:auto; }
+
+.acct-actions{ display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }

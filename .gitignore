@@ -17,3 +17,6 @@ ui/index.html.bak_before_*
 
 # macOS 在非 APFS 卷上生成的 AppleDouble 伴生文件
 ._*
+
+# 本地备份目录（回滚用，不进仓）
+.bak-*/

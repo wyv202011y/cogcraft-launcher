@@ -3,7 +3,8 @@
 
 'use strict';
 
-const WNAME = ['欢迎', '你的昵称', '硬件检测', '选择版本', '加入交流群', '准备就绪'];
+const WNAME = ['欢迎', '登录账号', '绑定 QQ', '硬件检测', '选择版本', '加入交流群', '准备就绪'];
+let authMode = 'login';   // 'login' | 'register'，登录步内部切换用
 // 群信息：与官网导航栏同源（463960828），改群时这里和站上一起改
 const QQ_GROUP = '463960828';
 const QQ_URL = 'https://qm.qq.com/q/xqjGbFAQIU';
@@ -12,7 +13,19 @@ const LAST = WNAME.length - 1;
 const NAME_RE = /^[\u4e00-\u9fa5A-Za-z0-9_]{2,16}$/;
 let wStep = 0;
 
-function openWizard(){ wStep = 0; $('wizard').classList.add('on'); renderWizard(); }
+function openWizard(){
+  wStep = 0;
+  // 预览用：?wstep=N 直接停在某一步、?auth=register 预置注册态
+  // （和 README 里 ?onboard=1 / ?panel=1 同一套做法，只影响界面预览）
+  try{
+    const q = new URLSearchParams(location.search);
+    const ws = parseInt(q.get('wstep') || '0', 10);
+    if (!isNaN(ws) && ws >= 0 && ws <= LAST) wStep = ws;
+    if (q.get('auth') === 'register') authMode = 'register';
+  } catch (e){}
+  $('wizard').classList.add('on');
+  renderWizard();
+}
 function closeWizard(){ $('wizard').classList.remove('on'); }
 
 function renderWizard(){
@@ -22,6 +35,7 @@ function renderWizard(){
   const variants = st.variants || [];
   const cur = st.variant || (variants[0] || {}).id;
   const server = st.server || {};
+  const authState = st.auth || {};
 
   $('wStepName').textContent = WNAME[wStep];
   const dotsBox = $('wDots');
@@ -35,7 +49,10 @@ function renderWizard(){
   $('wBack').style.visibility = wStep === 0 ? 'hidden' : 'visible';
   $('wNext').disabled = false;               // 昵称那步会按校验结果重新禁掉
   $('wNext').textContent = wStep === 0 ? '开始配置'
-                         : (wStep === LAST ? '开始安装' : '下一步');
+                         : (wStep === 1
+                              ? (authState.logged_in ? '继续'
+                                 : (authMode === 'register' ? '注册并继续' : '登录并继续'))
+                              : (wStep === LAST ? '开始安装' : '下一步'));
 
   const body = $('wBody');
   body.className = 'wbody' + (wStep === 0 ? '' : ' lft');
@@ -54,28 +71,51 @@ function renderWizard(){
   }
 
   if (wStep === 1){
-    // 为什么放在最前面：服务器拿这个 ID 认人，装完再改等于换人。
-    // 事先确认一遍，比事后在设置里翻找强。
-    // 只在玩家自己填过时才预填：没填过时后端给的是系统用户名（server / Administrator），
-    // 那东西当游戏 ID 又丑又容易不合规，不如留空让他自己起。
-    const cfg = st.settings || {};
-    const curName = cfg.player_name_set ? (cfg.player_name || '') : '';
-    body.innerHTML =
-      '<div class="wsec">先给自己起个名字</div>' +
-      '<div class="wname">' +
-        '<input id="wNameInput" maxlength="16" spellcheck="false" autocomplete="off" ' +
-          'placeholder="游戏内名字，例如 Steve" value="' + esc(curName) + '">' +
-        '<span class="cnt" id="wNameCnt">' + curName.length + '/16</span>' +
-      '</div>' +
-      '<div class="wname-err" id="wNameErr"></div>' +
-      '<div class="wsub" style="margin-top:8px">' +
-        '服务器用这个名字认你，进服之后改名等于换人（存档、背包、权限都带不走）。<br>' +
-        '<span style="color:#4a5260">支持中文、字母、数字、下划线，2~16 个字符；' +
-        '不要空格和符号。之后在设置里也能改。</span></div>';
-    bindNameStep();
+    // 账号放在昵称原来的位置：服务端开 online-mode 后，叫什么名字由账号决定，
+    // 不再让玩家单独填。老玩家用原来的游戏名注册，UUID 不变，存档和背包都还在。
+    if (authState.logged_in){
+      body.innerHTML =
+        '<div class="wsec">已经登录了</div>' +
+        '<div class="acct-card">' +
+          '<span class="av">' + esc((authState.player_name || '?').charAt(0).toUpperCase()) + '</span>' +
+          '<div class="acct-meta">' +
+            '<div class="acct-name">' + esc(authState.player_name || '') + '</div>' +
+            '<div class="acct-sub">cogcraft 账号</div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="wsub" style="margin-top:18px">进游戏后用的就是这个 ID。' +
+          '<br><span style="color:#4a5260">要换人点下面的「切换账号」，换账号要重新输密码。</span></div>';
+      $('wNext').textContent = '继续';
+    } else {
+      const isReg = authMode === 'register';
+      body.innerHTML =
+        '<div class="wsec">' + (isReg ? '创建你的账号' : '先登录你的账号') + '</div>' +
+        (isReg
+          ? '<div class="wsub" style="margin-top:2px">这个游戏 ID 会一直跟着你，进服后大家看到的就是它。' +
+            '<br><span style="color:#4a5260">以前玩过的老玩家，用原来的游戏名注册，存档和背包都还在。</span></div>'
+          : '<div class="wsub" style="margin-top:2px">用你在服务器上的游戏 ID 和密码登录。' +
+            '<br><span style="color:#4a5260">第一次来？点下面的「注册一个」。</span></div>') +
+        '<div class="wform">' +
+          '<input id="wAuthName" maxlength="16" spellcheck="false" autocomplete="off" placeholder="游戏 ID">' +
+          '<input id="wAuthPwd" type="password" maxlength="64" placeholder="密码">' +
+          (isReg ? '<input id="wAuthPwd2" type="password" maxlength="64" placeholder="再输一次密码">' : '') +
+        '</div>' +
+        '<div class="wform-err" id="wAuthErr"></div>' +
+        '<a class="wlink" id="wAuthSwitch">' + (isReg ? '已有账号？去登录' : '没有账号？注册一个') + '</a>';
+      bindAuthStep();
+    }
   }
 
   if (wStep === 2){
+    body.innerHTML =
+      '<div class="wsec">绑定你的 QQ</div>' +
+      '<div class="wsub">绑定之后，服务器通知、活动、处理问题都能直接找到你。<br>' +
+        '<span style="color:#4a5260">不绑也能继续用，以后在设置里随时补。</span></div>' +
+      '<div class="bindarea" id="bindArea"><div class="bindwait">正在获取验证码…</div></div>';
+    fillBindArea();
+  }
+
+  if (wStep === 3){
     const hw = st.hardware || {};
     const cpu = hw.cpu || {}, ram = hw.ram || {};
     const gpu = (hw.gpu || [])[0] || {};
@@ -108,7 +148,7 @@ function renderWizard(){
         '</b>。<br><span style="color:#4a5260">' + reason + '</span></div>';
   }
 
-  if (wStep === 3){
+  if (wStep === 4){
     body.innerHTML =
       '<div class="wsec">选一个版本</div>' +
       '<div class="vcards">' + variants.map(v => {
@@ -130,7 +170,7 @@ function renderWizard(){
     });
   }
 
-  if (wStep === 4){
+  if (wStep === 5){
     body.innerHTML =
       '<div class="wsec">装之前先进个群</div>' +
       '<div class="qqbox">' +
@@ -150,7 +190,7 @@ function renderWizard(){
     bindQQStep();
   }
 
-  if (wStep === 5){
+  if (wStep === 6){
     const v = variants.find(x => x.id === cur) || {};
     const memMb = mem.xmx_mb || '—';
     body.innerHTML =
@@ -187,22 +227,87 @@ function esc(v){
   });
 }
 
-function bindNameStep(){
-  const inp = $('wNameInput'), cnt = $('wNameCnt'), err = $('wNameErr'), next = $('wNext');
-  if (!inp) return;
-  const check = function(){
-    const v = (inp.value || '').trim();
-    cnt.textContent = (inp.value || '').length + '/16';
-    const ok = NAME_RE.test(v);
-    err.textContent = (v && !ok) ? '只能用中文、字母、数字、下划线，长度 2~16' : '';
-    err.className = 'wname-err' + ((v && !ok) ? ' on' : '');
-    next.disabled = !ok;                     // 不合格就不让往下走
-    return ok;
-  };
-  inp.oninput = check;
-  inp.onkeydown = function(e){ if (e.key === 'Enter' && check()) next.click(); };
-  check();
-  setTimeout(function(){ try { inp.focus(); inp.select(); } catch (e) {} }, 80);
+// ── 登录 / 注册 ──────────────────────────────
+
+function bindAuthStep(){
+  const nameInp = $('wAuthName'), pwdInp = $('wAuthPwd'), pwd2Inp = $('wAuthPwd2');
+  const sw = $('wAuthSwitch');
+
+  // 切换登录/注册：整体重画这一步。输入不保留 —— 两套表单状态混在一起更容易出 bug。
+  if (sw){
+    sw.onclick = function(){
+      authMode = (authMode === 'login') ? 'register' : 'login';
+      renderWizard();
+    };
+  }
+
+  if (nameInp){
+    nameInp.onkeydown = function(e){ if (e.key === 'Enter' && pwdInp) pwdInp.focus(); };
+  }
+  if (pwdInp){
+    pwdInp.onkeydown = function(e){
+      if (e.key !== 'Enter') return;
+      if (pwd2Inp) pwd2Inp.focus(); else submitAuth();
+    };
+  }
+  if (pwd2Inp){
+    pwd2Inp.onkeydown = function(e){ if (e.key === 'Enter') submitAuth(); };
+  }
+
+  setTimeout(function(){ try { if (nameInp) nameInp.focus(); } catch (e) {} }, 80);
+}
+
+function authSay(msg){
+  const err = $('wAuthErr');
+  if (!err) return;
+  err.textContent = msg || '';
+  err.className = 'wform-err' + (msg ? ' on' : '');
+}
+
+// 登录步提交。成功 true，失败把原因写在表单下面。
+async function submitAuth(){
+  const nameInp = $('wAuthName'), pwdInp = $('wAuthPwd'), pwd2Inp = $('wAuthPwd2');
+  const btn = $('wNext');
+  const name = (nameInp ? nameInp.value : '').trim();
+  const pwd = pwdInp ? pwdInp.value : '';
+  const isReg = authMode === 'register';
+
+  if (!name){ authSay('先填游戏 ID'); if (nameInp) nameInp.focus(); return false; }
+  if (!pwd){ authSay('密码不能为空'); if (pwdInp) pwdInp.focus(); return false; }
+  if (isReg){
+    if (pwd.length < 8){ authSay('密码至少 8 位'); if (pwdInp) pwdInp.focus(); return false; }
+    if (pwd2Inp && pwd2Inp.value !== pwd){ authSay('两次输入的密码不一样'); pwd2Inp.focus(); return false; }
+  }
+
+  authSay('');
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = isReg ? '正在注册…' : '正在登录…';
+
+  try{
+    const r = isReg ? await api.auth_register(name, pwd) : await api.auth_login(name, pwd);
+    if (!r || !r.ok){
+      authSay((r && r.error) || '没成功，再试一次');
+      btn.disabled = false;
+      btn.textContent = oldText;
+      return false;
+    }
+    try { S = await api.state(); } catch (e) {}
+    renderWizard();            // 成功后会走「已登录卡片」分支
+    return true;
+  } catch (e){
+    authSay('连接失败，检查一下网络');
+    btn.disabled = false;
+    btn.textContent = oldText;
+    return false;
+  }
+}
+
+// 退出登录：清本地 token，回到登录页重输
+async function doLogout(){
+  try { await api.auth_logout(); } catch (e) {}
+  try { S = await api.state(); } catch (e) {}
+  renderWizard();
 }
 
 function bindQQStep(){
@@ -236,11 +341,10 @@ function bindQQStep(){
 
 $('wBack').onclick = () => { if (wStep > 0){ wStep--; renderWizard(); } };
 $('wNext').onclick = async () => {
-  if (wStep === 1){                       // 离开昵称步：先存进设置再走
-    const inp = $('wNameInput');
-    const nm = (inp ? inp.value : '').trim();
-    if (!NAME_RE.test(nm)) return;        // 按钮已 disabled，这里是双保险
-    try { render(await api.set_player(nm)); } catch (e) {}
+  if (wStep === 1 && !(S && S.auth && S.auth.logged_in)){
+    // 没登录就点「登录并继续」= 提交登录；失败就停在原地，不往下走
+    const ok = await submitAuth();
+    if (!ok) return;
   }
   if (wStep < LAST){ wStep++; renderWizard(); return; }
   $('wNext').disabled = true;
@@ -258,3 +362,109 @@ window.__steps = updateSteps;
 
 // 后台跑性能实测：后端立即返回（可能 pending），结果通过 bench 事件推回来，
 // 这样界面不会被 3.4 秒的测试卡住。
+
+
+// ══════════════ 绑定 QQ（引导第 3 步的大板块）══════════════
+// 设计：一次只显示一个东西，字大、居中，玩家不用在群里翻聊天记录找码。
+let bigCd = null, bigPoll = null;
+
+function stopBigTimers(){
+  if (bigCd){ clearInterval(bigCd); bigCd = null; }
+  if (bigPoll){ clearInterval(bigPoll); bigPoll = null; }
+}
+
+function bindDoneHTML(qq){
+  return '<div class="binddone">' +
+      '<div class="binddone-ok">✓</div>' +
+      '<div class="binddone-t">已绑定 QQ ' + qq + '</div>' +
+      '<div class="binddone-s">以后服务器有通知会直接发到这里</div>' +
+    '</div>';
+}
+
+async function fillBindArea(){
+  const box = $('bindArea');
+  if (!box) return;
+  stopBigTimers();
+
+  // 先看是不是已经绑过了
+  let st = null;
+  try { st = await api.auth_bind_status(); } catch (e){}
+  if (st && st.bound){ box.innerHTML = bindDoneHTML(st.qq_number); return; }
+  if (!(S && S.auth && S.auth.logged_in)){
+    box.innerHTML = '<div class="binderr">这一步需要先登录账号。</div>';
+    return;
+  }
+
+  box.innerHTML = '<div class="bindwait">正在获取验证码…</div>';
+  let r = null;
+  try { r = await api.auth_bind_code(); } catch (e){}
+
+  if (!r || r.ok === false){
+    box.innerHTML = '<div class="binderr">' + ((r && r.error) || '验证码没拿到，稍后再试。') +
+      '</div><div class="bindops"><button class="btn sub" id="bindRetry">重试</button></div>';
+    const bt = $('bindRetry');
+    if (bt) bt.onclick = () => fillBindArea();
+    return;
+  }
+  if (r.already_bound){ box.innerHTML = bindDoneHTML(r.qq_number); return; }
+
+  renderBindCode(box, String(r.code || ''), Number(r.expires_in || 300) || 300);
+}
+
+function renderBindCode(box, code, ttl){
+  const line = '绑定' + code;
+  box.innerHTML =
+    '<div class="bindbig">' +
+      '<div class="bindbig-lbl">把这行整条发到 QQ 群</div>' +
+      '<div class="bindbig-code">' + line + '</div>' +
+      '<div class="bindbig-cd" id="bindBigCd"></div>' +
+    '</div>' +
+    '<div class="bindops">' +
+      '<button class="btn sub" id="bindCopy">复制</button>' +
+      '<button class="btn sub" id="bindAgain">换一个</button>' +
+    '</div>' +
+    '<div class="bindskip"><a id="bindSkip">先不绑，直接下一步</a></div>';
+
+  const cp = $('bindCopy');
+  if (cp) cp.onclick = async () => {
+    try { await api.copy_text(line); cp.textContent = '已复制'; }
+    catch (e) { cp.textContent = '请手动复制'; }
+    setTimeout(() => { cp.textContent = '复制'; }, 1600);
+  };
+  const ag = $('bindAgain');
+  if (ag) ag.onclick = () => fillBindArea();
+  const sk = $('bindSkip');
+  if (sk) sk.onclick = () => { wStep++; renderWizard(); };
+
+  startBigCountdown(ttl);
+}
+
+function startBigCountdown(ttl){
+  stopBigTimers();
+  const end = Date.now() + ttl * 1000;
+
+  const tick = () => {
+    const el = $('bindBigCd');
+    if (!el) return;
+    const left = Math.max(0, Math.round((end - Date.now()) / 1000));
+    el.textContent = left > 0
+      ? ('验证码 ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0') + ' 内有效')
+      : '这枚验证码过期了，点「换一个」';
+    if (left <= 0) stopBigTimers();
+  };
+  tick();
+  bigCd = setInterval(tick, 1000);
+
+  // 玩家去群里发完，这边自己变「已绑定」——机器人不回复，全靠这里显示
+  let n = 0;
+  bigPoll = setInterval(async () => {
+    if (++n % 3 !== 0) return;
+    let s = null;
+    try { s = await api.auth_bind_status(); } catch (e){ return; }
+    if (s && s.bound){
+      stopBigTimers();
+      const box = $('bindArea');
+      if (box) box.innerHTML = bindDoneHTML(s.qq_number);
+    }
+  }, 1000);
+}

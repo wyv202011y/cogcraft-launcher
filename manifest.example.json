@@ -25,6 +25,16 @@
     "auto_join": true,
     "_说明": "auto_join=true 时用 --quickPlayMultiplayer 直接进服；address_lan 是内网地址，客户端探活通了优先用它（本地测试），不通回落 address"
   },
+  "auth": {
+    "_说明": "认证服地址从清单下发，改地址不用发新版启动器。启动器只存 token，不存密码。",
+    "api": "https://cogcraft.top/auth",
+    "injector": {
+      "_说明": "authlib-injector 的下载地址与校验值；版本升级只改这里。",
+      "url": "https://cogcraft.top/client/authlib-injector.jar",
+      "sha256": "填校验值",
+      "version": "1.2.8"
+    }
+  },
   "jvm": {
     "extra_args": [
       "-Djava.net.preferIPv4Stack=true"
@@ -119,5 +129,16 @@
     "api": "https://www.cogcraft.top/client/bind",
     "qq_group": "填群号",
     "_说明": "启动器生成 6 位绑定码，玩家在群里发『绑定 <码>』，机器人回查群成员身份后写入绑定"
+  },
+  "links": {
+    "_说明": "客户端里的官网入口。改这里不用发新版客户端；只认 https，非 https 会被启动器忽略。",
+    "home": "https://www.cogcraft.top/",
+    "donate": "https://www.cogcraft.top/thanks.php",
+    "announce": "https://www.cogcraft.top/announcements.php",
+    "rules": "https://www.cogcraft.top/rules.php",
+    "banlist": "https://www.cogcraft.top/banlist.php",
+    "skin": "https://www.cogcraft.top/skin.php",
+    "download": "https://www.cogcraft.top/client/",
+    "feedback": "https://www.cogcraft.top/feedback/"
   }
 }

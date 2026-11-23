@@ -76,13 +76,40 @@ function mockApi(){
     java:{path:"C:\\cogcraft\\runtime\\bin\\java.exe", bundled:true},
     settings:{player_name:"Steve", auto_join:true, variant:"full", memory_mb:null,
                onboarded:true, game_dir:"C:\\Users\\Player\\AppData\\Roaming\\cogcraft\\client"},
+    // 预览用：默认未登录（引导第 1 步才会显示登录表单）；加 ?acct=1 模拟已登录看账号胶囊
+    auth: (location.search.indexOf('acct=1') >= 0)
+      ? {logged_in:true, name:"Wangyingbo", uuid:"6da93bbf2c1e3f0a8b4d5c6e7f809a1b"}
+      : {logged_in:false},
     modloader:{type:"neoforge", version:"21.1.264"},
-    minecraft:{version:"1.21.1"}
+    minecraft:{version:"1.21.1"},
+    // 官网入口（Phase 3）：真机由后端 state() 从清单 links 下发，这里给预览同一份
+    links:{
+      home:"https://www.cogcraft.top/",        donate:"https://www.cogcraft.top/thanks.php",
+      announce:"https://www.cogcraft.top/announcements.php",
+      rules:"https://www.cogcraft.top/rules.php",
+      banlist:"https://www.cogcraft.top/banlist.php",
+      skin:"https://www.cogcraft.top/skin.php",
+      download:"https://www.cogcraft.top/client/",
+      feedback:"https://www.cogcraft.top/feedback/"
+    }
   };
   const clone = (o) => JSON.parse(JSON.stringify(o));
   return {
     bootstrap: async () => clone(HWD),
     state: async () => clone(HWD),
+    auth_login: async (u) => {
+      HWD.auth = {logged_in:true, name:u || "Wangyingbo",
+                   uuid:"6da93bbf2c1e3f0a8b4d5c6e7f809a1b"};
+      return clone({ok:true, name:HWD.auth.name, uuid:HWD.auth.uuid}); },
+    auth_register: async (u) => {
+      HWD.auth = {logged_in:true, name:u || "Wangyingbo",
+                   uuid:"6da93bbf2c1e3f0a8b4d5c6e7f809a1b"};
+      return clone({ok:true, name:HWD.auth.name, uuid:HWD.auth.uuid}); },
+    auth_logout: async () => { HWD.auth = {logged_in:false}; return clone({ok:true}); },
+    copy_text: async () => ({ok:true}),
+    open_url: async () => ({ok:true}),
+    auth_bind_status: async () => clone({bound:false}),
+    auth_bind_code: async () => clone({ok:true, already_bound:false, code:"418302", expires_in:300}),
     start: async () => ({ok:true}),
     launch: async () => ({ok:true}),
     set_variant: async (v) => { HWD.variant = v; return clone(HWD); },

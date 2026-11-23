@@ -19,6 +19,7 @@ import webbrowser
 import threading
 import time
 import traceback
+import urllib.request
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ENGINE = os.path.join(_HERE, "engine")
@@ -31,12 +32,13 @@ import manifest as manifest_mod  # noqa: E402
 import pipeline as pipeline_mod  # noqa: E402
 import bench as bench_mod  # noqa: E402
 import updater as updater_mod  # noqa: E402
-import selfupdate as selfupdate_mod  # noqa: E402
+import selfupdate as selfupdate_mod
+import auth as auth_mod  # noqa: E402  # noqa: E402
 
 APP_NAME = "cogcraft"
 # 版本号唯一来源：CI 打包时从这里读，发版脚本也从这里读。
 # 改版本 = 改这一行，别在别处再写一份。
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 MANIFEST_URL = "https://www.cogcraft.top/client/manifest.json"
 # 启动器自身的更新元数据（几十字节的 JSON），与清单分开：
 # 清单管「游戏文件」，这里管「启动器本体」，两者的发布节奏不同。
@@ -450,6 +452,11 @@ class Api:
             "data_in_app": in_bundle(),
             "modloader": (mf.get("modloader") or {}),
             "minecraft": (mf.get("minecraft") or {}),
+            "auth": self._auth_state(),
+            # 官网入口链接（Phase 3）：只放行 https，清单里的 "_说明" 之类自然被滤掉。
+            # 过滤放在这里而不是界面里 —— 界面拿到的东西就是可信的，JS 侧不用再猜。
+            "links": {k: v for k, v in ((mf.get("links") or {}).items())
+                      if isinstance(v, str) and v.strip().lower().startswith("https://")},
         }
 
     def _describe_safe(self, hw: dict) -> str:
@@ -678,14 +685,15 @@ class Api:
         return {"ok": True, "restarting": True}
 
     def open_download_page(self) -> dict:
-        """打开官网客户端下载页（启动器有新版本时用）。"""
-        import webbrowser
-        url = "https://www.cogcraft.top/#download"
-        try:
-            webbrowser.open(url)
-            return {"ok": True, "url": url}
-        except Exception as e:
-            return {"ok": False, "url": url, "error": str(e)}
+        """打开官网客户端下载页（启动器有新版本时用）。
+
+        地址取自清单 links.download —— 换下载地址不用发新版客户端。
+        打开动作交给 open_url()：原来这里自己 import webbrowser + 硬编码 URL，
+        跟 open_url() 是同一件事的两套实现，改了其中一处另一处就不同步。
+        """
+        url = ((self.manifest or {}).get("links") or {}).get("download") \
+            or "https://www.cogcraft.top/client/"
+        return self.open_url(url)
 
     # ── 设置修改 ──
     def benchmark(self, force: bool = False) -> dict:
@@ -733,6 +741,42 @@ class Api:
                 pass
         self.emit("bench", res)
 
+    def copy_text(self, text: str) -> dict:
+        """把一段文本放进系统剪贴板（验证码这种要让玩家粘到 QQ 里的东西）。
+
+        不用前端的 navigator.clipboard：pywebview 的 WebView 里它常被安全策略拦掉，
+        表现为「点了没反应、也不报错」，玩家会以为按钮坏了。也不优先用 tkinter ——
+        它要求主线程且需要显示环境，在无头/后台场景直接抛异常。
+        所以按平台调系统命令，全失败才退回 tkinter。
+        """
+        t = (text or "").strip()
+        if not t or len(t) > 200:
+            return {"ok": False, "error": "没有可复制的内容"}
+        import subprocess as _sp
+        if sys.platform == "darwin":
+            cmds = [["pbcopy"]]
+        elif sys.platform.startswith("win"):
+            cmds = []
+        else:
+            cmds = [["xclip", "-selection", "clipboard"], ["xsel", "-ib"], ["wl-copy"]]
+        for c in cmds:
+            try:
+                _sp.run(c, input=t.encode("utf-8"), check=True, timeout=5)
+                return {"ok": True}
+            except Exception:
+                continue
+        try:
+            import tkinter
+            root = tkinter.Tk()
+            root.withdraw()
+            root.clipboard_clear()
+            root.clipboard_append(t)
+            root.update()
+            root.destroy()
+            return {"ok": True}
+        except Exception:
+            return {"ok": False, "error": "剪贴板不可用，请手动选中复制"}
+
     def open_url(self, url: str) -> dict:
         """用系统浏览器打开外部链接（加群页等）。
 
@@ -758,6 +802,97 @@ class Api:
         self.settings["memory_mb"] = int(mb) if mb else None
         save_settings(self.settings)
         return self.state()
+
+    # ────────────────── 账号 ──────────────────
+
+    def _auth_state(self) -> dict:
+        """给界面看的登录态。只暴露必要的字段，token 本身不发给前端。"""
+        rec = auth_mod.load(appdata_dir())
+        if not rec:
+            return {"logged_in": False}
+        return {
+            "logged_in": True,
+            "player_name": rec.get("player_name", ""),
+            "uuid": rec.get("uuid", ""),
+            "api": rec.get("api", ""),
+            "expires_at": rec.get("expires_at", 0),
+        }
+
+    def _auth_base(self) -> str:
+        return auth_mod.api_base(self.manifest)
+
+    def auth_register(self, username: str, password: str) -> dict:
+        """注册。成功后立刻用同组凭据登录，玩家不用再输一遍。"""
+        base = self._auth_base()
+        try:
+            reg = auth_mod.register(base, (username or "").strip(), password or "")
+            resp = auth_mod.login(base, (username or "").strip(), password or "")
+            auth_mod.save(appdata_dir(), base, resp)
+            # 账号名以服务端返回为准（大小写可能与输入不同）
+            self.settings["player_name"] = reg.get("name") or username
+            self.settings["player_name_set"] = True
+            save_settings(self.settings)
+            self._log(f"[auth] 注册并登录成功: {reg.get('name')}")
+            return {"ok": True, "state": self._auth_state()}
+        except auth_mod.AuthError as e:
+            self._log(f"[auth] 注册失败: {e.message}")
+            return {"ok": False, "error": e.message}
+        except Exception as e:
+            self._log(f"[auth] 注册异常: {e}")
+            return {"ok": False, "error": "注册时出了点意外，稍后再试。"}
+
+    def auth_login(self, username: str, password: str) -> dict:
+        base = self._auth_base()
+        try:
+            resp = auth_mod.login(base, (username or "").strip(), password or "")
+            rec = auth_mod.save(appdata_dir(), base, resp)
+            self.settings["player_name"] = rec.get("player_name") or username
+            self.settings["player_name_set"] = True
+            save_settings(self.settings)
+            self._log(f"[auth] 登录成功: {rec.get('player_name')}")
+            return {"ok": True, "state": self._auth_state()}
+        except auth_mod.AuthError as e:
+            self._log(f"[auth] 登录失败: {e.message}")
+            return {"ok": False, "error": e.message}
+        except Exception as e:
+            self._log(f"[auth] 登录异常: {e}")
+            return {"ok": False, "error": "登录时出了点意外，稍后再试。"}
+
+    def auth_logout(self) -> dict:
+        """退出登录 = 清掉本地 token，回到登录页重新输入。"""
+        auth_mod.clear(appdata_dir())
+        self._log("[auth] 已退出登录")
+        return {"ok": True, "state": self._auth_state()}
+
+    def auth_bind_code(self) -> dict:
+        """申请 QQ 绑定码。需要已登录，用 token 认人。"""
+        rec = auth_mod.load(appdata_dir())
+        if not rec:
+            return {"ok": False, "error": "先登录。"}
+        base = auth_mod.api_base(self.manifest)
+        try:
+            status, body = auth_mod._post(f"{base}/bind/code", None,
+                                          token=rec.get("access_token", ""))
+            if status != 200 or not isinstance(body, dict):
+                return {"ok": False, "error": "申请绑定码失败，稍后再试。"}
+            return {"ok": True, **body}
+        except auth_mod.AuthError as e:
+            return {"ok": False, "error": e.message}
+        except Exception:
+            return {"ok": False, "error": "申请绑定码时出了点意外。"}
+
+    def auth_bind_status(self) -> dict:
+        rec = auth_mod.load(appdata_dir())
+        if not rec:
+            return {"ok": False, "error": "先登录。"}
+        base = auth_mod.api_base(self.manifest)
+        try:
+            req = urllib.request.Request(f"{base}/bind/status", method="GET")
+            req.add_header("Authorization", f"Bearer {rec.get('access_token','')}")
+            with urllib.request.urlopen(req, timeout=12) as r:
+                return {"ok": True, **json.loads(r.read().decode() or "{}")}
+        except Exception:
+            return {"ok": False, "error": "查询绑定状态失败。"}
 
     def set_player(self, name: str) -> dict:
         self.settings["player_name"] = (name or "").strip()[:16]
@@ -897,9 +1032,22 @@ class Api:
         loader_id = f"{self.manifest['modloader'].get('type', 'neoforge')}-" \
                     f"{self.manifest['modloader']['version']}"
 
+        # 启动前确认凭证有效：过期会尝试自动刷新，刷不了就要求重新登录。
+        # 未登录时不启动游戏 —— 服务端开了 online-mode 后没有凭证进不去，
+        # 与其让玩家看到一句没头没尾的「连接被拒绝」，不如在这里拦下。
+        cred = auth_mod.ensure_valid(appdata_dir(), self.manifest)
+        if not cred:
+            self.emit("phase", {"phase": "need_login",
+                                "text": "账号登录已失效，请重新登录后再启动"})
+            return
+
         cmd, _merged = build_command(
             self.settings["game_dir"], loader_id, java,
-            {"player_name": self.settings["player_name"],
+            {"player_name": cred["player_name"],
+             "uuid": cred["uuid"],
+             "access_token": cred["access_token"],
+             # 外置登录在规范里也填 mojang（见 authlib-injector 启动器技术规范）
+             "user_type": "mojang",
              "max_memory_mb": rec["xmx_mb"],
              "server_address": addr or "",
              "extra_jvm": rec["jvm_args"] + (self.manifest.get("jvm", {}).get("extra_args") or [])})

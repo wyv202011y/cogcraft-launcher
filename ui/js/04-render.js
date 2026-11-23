@@ -40,6 +40,10 @@ function setBar(mode){
 // ═══ 渲染 ═══
 function render(st){
   S = st;
+  // 账号胶囊（10-account.js）；渲染时脚本可能还没加载完，用 typeof 兜一下
+  if (typeof renderAcctChip === 'function') renderAcctChip();
+  // 官网入口（11-links.js）：同上。每次 state 刷新都重画，因此改清单后重启即生效
+  if (typeof renderLinks === 'function') renderLinks();
   const mf = st.minecraft || {}, ml = st.modloader || {}, srv = st.server || {};
 
   $('fMc').textContent = mf.version || '—';

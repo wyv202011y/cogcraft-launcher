@@ -61,14 +61,16 @@ def main() -> None:
                  "--hidden-import", "clr",
                  "--collect-all", "webview"]
     else:
-        # Linux：mac 有 WKWebView、win 有 WebView2，Linux 没有系统级 webview，
-        # pywebview 只能走 Qt 或 GTK。这里走 Qt —— 用 pip 装、能整包带进冻结包，
-        # 用户机器零依赖（GTK 路线包小一半，但要求系统装了 webkit2gtk + PyGObject）。
-        # 这几个包都是 pywebview 在函数里延迟 import 的，PyInstaller 静态扫不到，必须显式声明。
-        args += ["--hidden-import", "webview.platforms.qt",
-                 "--hidden-import", "qtpy",
-                 "--hidden-import", "PyQt5.QtWebEngineWidgets",
-                 "--hidden-import", "PyQt5.QtWebEngineCore"]
+        # Linux 不发布（2026-11-24 定）。Linux 没有系统级 webview，只有两条路：
+        # Qt（把整个 Chromium 塞进包里，实测 327 MB，是 mac/win 的 5 倍多）或
+        # GTK（包小但要求用户机器装 webkit2gtk）。两条都不值当，Linux 版直接不做。
+        # 若将来要恢复：PyQt5 那几个模块是 pywebview 延迟 import 的，PyInstaller
+        # 静态扫不到，必须显式 --hidden-import；而且项目和 venv 都不能放在含中文的
+        # 路径下（Qt 的 QLibraryInfo 会把中文解成 ?，PyInstaller 报插件目录不存在）。
+        raise SystemExit(
+            "Linux 版不发布。这个分支只在 macOS / Windows 上打包，"
+            "要恢复见 ci/build.py 里这段注释。"
+        )
     # 图标：mac 必须 .icns（PyInstaller 会自动写进 CFBundleIconFile），win 用 .ico。
     # 上次打成默认 Python 图标就是因为这里没传 --icon、仓库里也没有素材。
     icon = None

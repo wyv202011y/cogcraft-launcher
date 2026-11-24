@@ -22,11 +22,10 @@ const LINK_META = {
   feedback: '反馈',
 };
 
-// 账号面板底部：只放最常看的四个，一行放得下（用户反感占地方）
-const LINK_TOP = ['home', 'announce', 'rules', 'banlist'];
-// 设置面板「关于」：全列
-const LINK_ABOUT = ['home', 'donate', 'announce', 'rules', 'banlist',
-                    'skin', 'download', 'feedback'];
+// 主屏底部那一行：全列。整个客户端只有这一处入口，
+// 设置面板和账号面板里都不再重复放（同一功能不留多套）。
+const LINK_FOOT = ['home', 'donate', 'announce', 'rules', 'banlist',
+                   'skin', 'download', 'feedback'];
 
 function linkTable() {
   return (typeof S !== 'undefined' && S && S.links) ? S.links : {};
@@ -61,13 +60,14 @@ function linkRender(el, keys) {
     box.appendChild(a);
   });
   el.textContent = '';
-  el.appendChild(box);
+  // 一条都没配就别塞空 <span>：留空的 el 才能命中 .plinks:empty，
+  // 否则那条分隔线会孤零零挂在底栏下面
+  if (box.childNodes.length) { el.appendChild(box); }
 }
 
 /** 04-render.js 每次 render(st) 都会调一次（用 typeof 兜底，脚本可能还没加载完） */
 function renderLinks() {
-  linkRender(document.getElementById('acctLinks'), LINK_TOP);
-  linkRender(document.getElementById('aboutLinks'), LINK_ABOUT);
+  linkRender(document.getElementById('footLinks'), LINK_FOOT);
   // 清单里没配捐赠链接就不显示这颗心，不占顶栏位置
   const b = document.getElementById('btnDonate');
   if (b) { b.hidden = !linkSafe(linkTable().donate); }

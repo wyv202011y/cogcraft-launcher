@@ -31,8 +31,6 @@
     <div class="phead"><h2>账号</h2><p id="acctHeadSub"></p></div>
     <div class="pbody">
       <div class="col" id="acctBody"></div>
-      <!-- 官网入口：一行小字，不占卡片 -->
-      <div class="plinks" id="acctLinks"></div>
     </div>
   </div>
 
@@ -60,6 +58,9 @@
       <span>模组 <b id="fMods">—</b></span>
       <span>内存 <b id="fRam">—</b></span>
     </div>
+
+    <!-- 官网入口：主屏底部唯一入口，内容由 11-links.js 按清单 links 段生成 -->
+    <div class="plinks footlinks" id="footLinks"></div>
     <div class="pill" id="pill">正在初始化</div>
   </div>
 
@@ -94,10 +95,6 @@
         <div class="card">
           <div class="lab" style="margin-bottom:10px">客户端版本</div>
           <div id="variantRows"></div>
-        </div>
-        <div class="card">
-          <div class="lab" style="margin-bottom:10px">关于 / 官网</div>
-          <div class="plinks about" id="aboutLinks"></div>
         </div>
       </div>
       <div class="col">

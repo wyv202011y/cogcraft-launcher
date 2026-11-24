@@ -2,6 +2,8 @@ name: build
 
 # 所有构建都在 GitHub 的 runner 上做，本地一行命令都不用跑，也不需要暴露任何东西。
 # 平台只出两个：Windows x64（玩家主力）+ macOS arm64（Apple Silicon）。
+# macOS 只出最新系统版本的原生包：不做 x86，不为旧版本 macOS 留兼容 ——
+# 用 macos-latest 打，打完就是「要求当前最新 macOS」。
 # 不做 x86 macOS —— Intel Mac 现在占比极低，多养一台 runner 不划算。
 # 手动触发出 test 包（Artifacts）；打 tag 出正式包并自动建 Release（玩家直接下载）。
 on:
@@ -25,13 +27,13 @@ jobs:
           path: dist/cogcraft-*.zip
           retention-days: 30
 
-  # ⚠️ 标签别写 macos-14：这台 runner 会 1 秒被杀，报
+  # 只出最新 macOS 原生包（2026-11-24 定）：不管 x86，不管旧系统，一直跟最新的打。
+  # macos-latest 现在是 arm64 的新版 macOS，跟着它走就行。
+  # ⚠️ 别写具体版本号：macos-14 这个标签会 1 秒被杀，报
   #    "The configuration 'macos-14-arm64-us-default' is not supported"。
-  #    2026-11-24 实测：macos-14 ❌、macos-15 ✅（macOS 15.8.2）、macos-latest ✅（macOS 26.7.2）。
-  #    用 macos-15 而不用 latest —— 打出来的包要能在玩家那些老系统上跑。
-  #    macos-13 是 Intel，出不了 arm64 包，别用。
+  #    macos-13 是 Intel，出不了 arm64 包。实测见 PLAN 的 §4.4。
   build-macos:
-    runs-on: macos-15
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

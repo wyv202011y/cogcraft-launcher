@@ -320,7 +320,7 @@ def normalize_url(url: str) -> str:
         p = urlsplit(url)
     except Exception:
         return url
-    path = quote(p.path, safe="/%")
+    path = quote(p.path, safe="/%:")
     query = quote(p.query, safe="=&%+")
     return urlunsplit((p.scheme, p.netloc, path, query, p.fragment))
 

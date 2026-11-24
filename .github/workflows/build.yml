@@ -25,11 +25,13 @@ jobs:
           path: dist/cogcraft-*.zip
           retention-days: 30
 
-  # GitHub-hosted macOS runner 平台侧故障（2026-11 起分不到机器，job 1 秒被 cancelled）。
-  # 保留等恢复，但 release 绝不能依赖它 —— 否则 Windows 明明成功也会被它卡住发不出去。
+  # ⚠️ 标签别写 macos-14：这台 runner 会 1 秒被杀，报
+  #    "The configuration 'macos-14-arm64-us-default' is not supported"。
+  #    2026-11-24 实测：macos-14 ❌、macos-15 ✅（macOS 15.8.2）、macos-latest ✅（macOS 26.7.2）。
+  #    用 macos-15 而不用 latest —— 打出来的包要能在玩家那些老系统上跑。
+  #    macos-13 是 Intel，出不了 arm64 包，别用。
   build-macos:
-    runs-on: macos-14
-    continue-on-error: true
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -45,7 +47,8 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build-windows
+    # 两个平台都齐了才发：宁可整条流水线红一次，也不要发出缺 mac 包的版本
+    needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

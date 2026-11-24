@@ -216,6 +216,10 @@ DEFAULT_SETTINGS = {
     "prefer_zgc": False,
     "onboarded": False,       # 首次引导是否走完
     "server_address": "",     # "" = 自动（内网可达用内网，否则用清单里的公网地址）
+    # ── Phase 5 测试模式 ──
+    "mode": "normal",         # normal | test（test 只在档位为 beta/admin 时真正生效）
+    "tier": "normal",         # 账号档位，登录后从认证服拉；拉不到按 normal
+    "tier_at": 0,             # 上次拉档位的时间戳，用于 TTL 内不重复问
 }
 
 # 探活结果按地址缓存，避免每次 state() 都白等超时
@@ -375,9 +379,107 @@ class Api:
             except Exception:
                 self.manifest = {}
 
+    # ────────────── 测试模式（Phase 5）──────────────
+    def tier(self) -> str:
+        t = (self.settings.get("tier") or "normal").strip().lower()
+        return t if t in ("normal", "beta", "admin") else "normal"
+
+    def mode(self) -> str:
+        """当前真正生效的模式。档位不够时**强制回落 normal** ——
+        不靠界面藏按钮，数据层就不认，防止手改 settings.json 混进测试服。"""
+        want = (self.settings.get("mode") or "normal").strip().lower()
+        if want == "test" and self.tier() in ("beta", "admin"):
+            return "test"
+        return "normal"
+
+    def game_dir(self) -> str:
+        """当前模式该用的资源目录。
+
+        测试资源与主服资源**物理隔离**：同一父目录下的 client-test/。
+        绝不复用 client/ —— 两套清单的模组集不同，共用目录会让两边互相判无效。
+        """
+        base = self.settings.get("game_dir") or os.path.join(appdata_dir(), "client")
+        if self.mode() != "test":
+            return base
+        base = base.rstrip("/\\")
+        return os.path.join(os.path.dirname(base), "client-test")
+
+    def effective_manifest(self) -> dict:
+        """当前模式实际生效的清单。
+
+        测试模式下把 server / modloader 换成清单里的 server_test 段。
+        这样 pipeline / launch / server_choice 全都不用各自判断模式 ——
+        单一机制，改一处就够（Phase 5）。
+        """
+        mf = self.manifest or {}
+        if not mf or self.mode() != "test":
+            return mf
+        ts = mf.get("server_test")
+        if not isinstance(ts, dict) or not ts:
+            return mf
+        out = dict(mf)
+        out["server"] = {k: ts[k] for k in ("name", "address", "address_lan", "auto_join")
+                         if k in ts}
+        ml = dict(mf.get("modloader") or {})
+        ver = ((ts.get("modloader") or {}).get("version") or "").strip()
+        if ver:
+            ml["version"] = ver
+            # 版本变了，旧的安装器地址与 sha1 必须丢掉：
+            # 错的 sha1 比没有更糟（会把能下的源全判成内容不对）。
+            ml.pop("installer_url", None)
+            ml.pop("installer_sha1", None)
+        out["modloader"] = ml
+        out["server_notice"] = ts.get("notice") or ""
+        return out
+
+    def refresh_tier(self, force: bool = False) -> str:
+        """向认证服问一次档位。拉不到就保持原值，绝不阻塞任何流程。
+
+        TTL 6 小时：档位不会天天变，每次启动都问一次没必要。
+        """
+        TTL = 6 * 3600
+        now = time.time()
+        if not force and (now - float(self.settings.get("tier_at") or 0)) < TTL:
+            return self.tier()
+        rec = auth_mod.load(appdata_dir()) or {}
+        tok = rec.get("access_token") or ""
+        if not tok:
+            return self.tier()
+        got = auth_mod.fetch_tier(auth_mod.api_base(self.manifest), tok)
+        if got:
+            if got != self.settings.get("tier"):
+                self._log(f"[tier] {self.settings.get('tier')} → {got}")
+            self.settings["tier"] = got
+            # 档位掉了就把测试模式一起收回去，别留个进不去的状态
+            if got == "normal" and self.settings.get("mode") == "test":
+                self.settings["mode"] = "normal"
+                self._log("[tier] 档位回落 normal，测试模式已关闭")
+        self.settings["tier_at"] = now
+        save_settings(self.settings)
+        return self.tier()
+
+    def set_mode(self, mode: str) -> dict:
+        """切 常规 / 测试 模式。normal 玩家调用会被拒绝（不是界面藏按钮，是数据层不认）。"""
+        m = (mode or "").strip().lower()
+        if m not in ("normal", "test"):
+            raise ValueError("mode 只能是 normal / test")
+        if m == "test" and self.tier() not in ("beta", "admin"):
+            raise ValueError("这个账号没有测试模式权限")
+        self.settings["mode"] = m
+        save_settings(self.settings)
+        # 换目录后文件指纹缓存不再适用，清掉重算（不清也不会错，但会白信一次 mtime）
+        self._filecache = {}
+        try:
+            if os.path.exists(self._filecache_path):
+                os.remove(self._filecache_path)
+        except Exception:
+            pass
+        self._log(f"[mode] 切到 {m} 模式，资源目录 {self.game_dir()}")
+        return self.state()
+
     def state(self) -> dict:
         """界面渲染需要的全部数据。"""
-        mf = self.manifest or {}
+        mf = self.effective_manifest() or {}
         hw = self.hw or {}
 
         cached_bench = self.settings.get("bench") or None
@@ -392,12 +494,12 @@ class Api:
         except Exception:
             rec = {}
 
-        variants = manifest_mod.variant_summary(mf) if mf else []
+        variants = manifest_mod.variant_summary(mf, self.tier()) if mf else []
         plan = {}
         if mf:
             try:
-                v = manifest_mod.pick_variant(mf, variant_id)
-                plan = manifest_mod.plan_sync(v, self.settings["game_dir"],
+                v = manifest_mod.pick_variant(mf, variant_id, self.tier())
+                plan = manifest_mod.plan_sync(v, self.game_dir(),
                                               cache=self._filecache)
                 if plan.get("hashed"):
                     # 只有真算过哈希才落盘，避免每次界面刷新都写文件
@@ -440,6 +542,9 @@ class Api:
                 "trusted": plan.get("trusted", 0),
             },
             "app_version": VERSION,
+            "mode": self.mode(),
+            "tier": self.tier(),
+            "game_dir": self.game_dir(),
             "update": self.update,
             "update_checking": self.update_checking,
             "server": self.server_choice(),
@@ -833,6 +938,7 @@ class Api:
             self.settings["player_name_set"] = True
             save_settings(self.settings)
             self._log(f"[auth] 注册并登录成功: {reg.get('name')}")
+            self.refresh_tier(force=True)     # 新账号一律 normal，问一次不吃亏
             return {"ok": True, "state": self._auth_state()}
         except auth_mod.AuthError as e:
             self._log(f"[auth] 注册失败: {e.message}")
@@ -850,6 +956,9 @@ class Api:
             self.settings["player_name_set"] = True
             save_settings(self.settings)
             self._log(f"[auth] 登录成功: {rec.get('player_name')}")
+            # 登录后立刻问档位：测试模式能不能用由它决定。
+            # 拉不到只写日志，绝不让登录失败。
+            self.refresh_tier(force=True)
             return {"ok": True, "state": self._auth_state()}
         except auth_mod.AuthError as e:
             self._log(f"[auth] 登录失败: {e.message}")
@@ -861,7 +970,13 @@ class Api:
     def auth_logout(self) -> dict:
         """退出登录 = 清掉本地 token，回到登录页重新输入。"""
         auth_mod.clear(appdata_dir())
-        self._log("[auth] 已退出登录")
+        # 身份没了，档位与测试模式必须一起收回 —— 否则下一个人在这台机器上
+        # 打开启动器，会直接顶着上一个人的 beta 权限看到测试变体。
+        self.settings["tier"] = "normal"
+        self.settings["tier_at"] = 0
+        self.settings["mode"] = "normal"
+        save_settings(self.settings)
+        self._log("[auth] 已退出登录，档位与模式已重置")
         return {"ok": True, "state": self._auth_state()}
 
     def auth_bind_code(self) -> dict:
@@ -915,7 +1030,7 @@ class Api:
         所以本地测试必须能落到内网地址上。做成自动判定而不是让用户每次手改，
         外地玩家探内网 1.2 秒不通就回落公网，无感。
         """
-        srv = dict(self.manifest.get("server") or {})
+        srv = dict(self.effective_manifest().get("server") or {})
         pub = srv.get("address") or ""
         lan = srv.get("address_lan") or ""
         manual = (self.settings.get("server_address") or "").strip()
@@ -1028,9 +1143,10 @@ class Api:
         addr = srv.get("address") if (srv.get("auto_join") and
                                       self.settings.get("auto_join", True)) else ""
 
-        mc_ver = self.manifest["minecraft"]["version"]
-        loader_id = f"{self.manifest['modloader'].get('type', 'neoforge')}-" \
-                    f"{self.manifest['modloader']['version']}"
+        mf_now = self.effective_manifest()
+        mc_ver = mf_now["minecraft"]["version"]
+        loader_id = f"{mf_now['modloader'].get('type', 'neoforge')}-" \
+                    f"{mf_now['modloader']['version']}"
 
         # 启动前确认凭证有效：过期会尝试自动刷新，刷不了就要求重新登录。
         # 未登录时不启动游戏 —— 服务端开了 online-mode 后没有凭证进不去，
@@ -1057,7 +1173,7 @@ class Api:
         if sys.platform == "win32":
             si = subprocess.STARTUPINFO()
             si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        self.proc = subprocess.Popen(cmd, cwd=self.settings["game_dir"],
+        self.proc = subprocess.Popen(cmd, cwd=self.game_dir(),
                                      stdout=subprocess.DEVNULL,
                                      stderr=subprocess.DEVNULL, startupinfo=si)
         self.emit("phase", {"phase": "running", "text": "游戏已启动"})

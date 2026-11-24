@@ -160,9 +160,39 @@ def validate(m: dict) -> dict:
     return m
 
 
-def pick_variant(m: dict, variant_id: str | None) -> dict:
-    """取版本；找不到则回退到第一个（服务器通常把推荐版排在前面）。"""
-    vars_ = m["variants"]
+# ── 变体可见性（Phase 5）──
+# 清单里每个变体带 access：public（所有人）/ beta（测试档）/ op·admin（管理档）。
+# 层级是包含关系：admin 看得到 beta 的，beta 看不到 admin 的。
+ACCESS_BY_TIER = {
+    "normal": ("public",),
+    "beta":   ("public", "beta"),
+    "admin":  ("public", "beta", "op", "admin"),
+}
+
+
+def allowed_access(tier: str | None) -> tuple:
+    """档位 → 允许看到的 access 集合。未知档位一律按 normal（宁可见不到，不可见多）。"""
+    return ACCESS_BY_TIER.get((tier or "").strip().lower(), ACCESS_BY_TIER["normal"])
+
+
+def visible_variants(m: dict, tier: str | None = None) -> list[dict]:
+    """按档位过滤变体。
+
+    access 缺省视为 public —— **老清单没有这个字段，于是全部可见**，
+    行为与 Phase 5 之前完全一致，零回归。
+    """
+    ok = allowed_access(tier)
+    return [v for v in (m.get("variants") or []) if (v.get("access") or "public") in ok]
+
+
+def pick_variant(m: dict, variant_id: str | None, tier: str | None = None) -> dict:
+    """取版本；找不到则回退到第一个（服务器通常把推荐版排在前面）。
+
+    tier 参与过滤：玩家当前档位看不到的变体，就算 settings 里记着它的 id 也不给。
+    """
+    vars_ = visible_variants(m, tier)
+    if not vars_:
+        vars_ = m["variants"] or []
     if variant_id:
         for v in vars_:
             if v["id"] == variant_id:
@@ -170,15 +200,16 @@ def pick_variant(m: dict, variant_id: str | None) -> dict:
     return vars_[0]
 
 
-def variant_summary(m: dict) -> list[dict]:
-    """给 UI 用的版本摘要。"""
+def variant_summary(m: dict, tier: str | None = None) -> list[dict]:
+    """给 UI 用的版本摘要（同样按档位过滤）。"""
     out = []
-    for v in m["variants"]:
+    for v in visible_variants(m, tier):
         files = v.get("files") or []
         out.append({
             "id": v["id"],
             "name": v.get("name", v["id"]),
             "desc": v.get("desc", ""),
+            "access": v.get("access") or "public",
             "mods_count": v.get("mods_count") or sum(
                 1 for f in files if f.get("path", "").startswith("mods/")),
             "min_ram_mb": v.get("min_ram_mb", 3072),

@@ -127,6 +127,31 @@ def refresh(base: str, access_token: str, client_token: str = "") -> dict | None
 
 # ── 本地凭证存储（只存 token，不存密码）──────────
 
+def fetch_tier(base: str, access_token: str, timeout: float = 6.0) -> str | None:
+    """问认证服「我这个账号是什么档位」。Phase 5 用：normal / beta / admin。
+
+    **拉不到一律返回 None，调用方按 normal 处理。** 档位查询只是锦上添花，
+    绝不能因为它超时/报错就挡住登录或启动 —— 那会把「服务器抖一下」放大成
+    「所有人都进不了游戏」。
+    """
+    if not access_token:
+        return None
+    req = urllib.request.Request(f"{base}/client/tier", method="GET")
+    req.add_header("Accept", "application/json")
+    req.add_header("Authorization", f"Bearer {access_token}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode("utf-8", "replace")
+    except Exception:
+        return None
+    try:
+        d = json.loads(raw) if raw.strip() else {}
+    except Exception:
+        return None
+    t = (d.get("tier") or "").strip().lower()
+    return t if t in ("normal", "beta", "admin") else None
+
+
 def token_path(appdata_dir: str) -> str:
     return os.path.join(appdata_dir, "auth.json")
 

@@ -59,6 +59,14 @@ STATES = {
       window.__onEvent('phase', {phase: 'exited',
         text: '游戏已退出', oom: 'heap', suggest_mb: 7168});""", ""),
 
+    # ── 测试模式（Phase 5）：档位三档各一张 ──
+    "14-normal-无测试元素": (
+      "render(Object.assign({}, S, {tier:'normal', mode:'normal'}));", ""),
+    "15-beta-测试模式": (
+      "render(Object.assign({}, S, {tier:'beta', mode:'test'}));", ""),
+    "16-admin-常规模式": (
+      "render(Object.assign({}, S, {tier:'admin', mode:'normal'}));", ""),
+
     # ── 首次引导 ──
     "08-引导-欢迎":   ("", "?onboard=1"),
     "09-引导-硬件检测": ("window.__wiz(1);", "?onboard=1"),
@@ -91,9 +99,11 @@ def render(name: str, spec) -> str:
                           real + ";</script>", 1)
     if js:
         src = src.replace("</body>", f"<script>setTimeout(function(){{{js}}},260);</script></body>")
-    tmp = tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8")
-    tmp.write(src)
-    tmp.close()
+    # ⚠️ 临时 HTML 必须和 index.html 同目录：页面用相对路径引 style.css 与 js/*.js，
+    # 放到系统临时目录会让它们全部 404，截出来是「没有样式」的假图（2026-11-24 实测）。
+    tmp_path = os.path.join(ROOT, "ui", ".tmp_shot_%d.html" % abs(hash(name)))
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(src)
     # chromium 写不出中文文件名的路径（会静默失败、产出 0 字节），
     # 所以先落到 ASCII 临时名，再用 Python 改名。
     # 临时文件必须和目标同盘，否则 os.replace 会 EXDEV；名字保持 ASCII
@@ -102,9 +112,12 @@ def render(name: str, spec) -> str:
         CHROME, "--headless=new", "--no-sandbox", "--disable-gpu",
         "--hide-scrollbars", f"--force-device-scale-factor={SCALE}",
         f"--window-size={W},{H}", "--virtual-time-budget=2500",
-        f"--screenshot={raw}", "file://" + tmp.name + query,
+        f"--screenshot={raw}", "file://" + tmp_path + query,
     ], capture_output=True, text=True)
-    os.unlink(tmp.name)
+    try:
+        os.unlink(tmp_path)
+    except OSError:
+        pass
     png = os.path.join(OUT, name + ".png")
     if os.path.exists(raw) and os.path.getsize(raw) > 3000:
         os.replace(raw, png)

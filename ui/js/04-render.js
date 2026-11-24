@@ -40,6 +40,8 @@ function setBar(mode){
 // ═══ 渲染 ═══
 function render(st){
   S = st;
+  // 测试模式（Phase 5）：档位与模式的可见性统一在这里收口
+  if (typeof renderMode === 'function') renderMode(st);
   // 账号胶囊（10-account.js）；渲染时脚本可能还没加载完，用 typeof 兜一下
   if (typeof renderAcctChip === 'function') renderAcctChip();
   // 官网入口（11-links.js）：同上。每次 state 刷新都重画，因此改清单后重启即生效
@@ -174,3 +176,45 @@ function fmtBytes(n){
 }
 
 // ═══ 交互 ═══
+
+
+// ═══ 测试模式（Phase 5）═══
+// 铁律：normal 档位的界面上**不出现任何测试元素** —— 不做灰按钮、不做「无权限」提示，
+// 整块不渲染。避免勾起无谓的好奇和提问（计划 §5.1）。
+let _testStripClosed = false;   // 横幅的「收起」只对本次会话有效，下次进客户端仍然显示
+
+function _escHtml(v){
+  return String(v == null ? '' : v).replace(/[&<>"']/g, function(c){
+    return ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' })[c];
+  });
+}
+
+function renderMode(st){
+  const tier = (st && st.tier) || 'normal';
+  const mode = (st && st.mode) || 'normal';
+  const canTest = (tier === 'beta' || tier === 'admin');
+
+  // ① 顶栏切换：只在 beta/admin 渲染
+  const seg = $('modeSeg');
+  if (seg){
+    seg.classList.toggle('show', canTest);
+    Array.prototype.forEach.call(seg.querySelectorAll('button'), function(b){
+      b.classList.toggle('on', b.dataset.mode === mode);
+    });
+  }
+
+  // ② 欢迎语：只给 admin，一行文字，不弹窗
+  const wel = $('welcomeLine');
+  if (wel){
+    const name = (st && st.settings && st.settings.player_name) || '';
+    const show = (tier === 'admin') && !!name;
+    wel.classList.toggle('show', show);
+    wel.innerHTML = show ? '欢迎登录管理员，<b>' + _escHtml(name) + '</b>' : '';
+  }
+
+  // ③ 横幅：只在测试模式显示
+  const strip = $('testStrip');
+  if (strip){
+    strip.classList.toggle('show', canTest && mode === 'test' && !_testStripClosed);
+  }
+}

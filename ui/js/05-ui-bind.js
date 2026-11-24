@@ -45,3 +45,25 @@ $('playerName').oninput = (e) => {
 
 
 // ══════════ 下载详情：步骤清单 ══════════
+
+
+// ══════════ 测试模式（Phase 5）══════════
+// 切换是**后端说了算**：set_mode 会校验档位，normal 玩家就算手改 settings.json 也切不过去。
+if ($('modeSeg')){
+  $('modeSeg').onclick = async (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (busy) { toast('正在准备客户端，等它跑完再切模式'); return; }
+    try {
+      render(await api.set_mode(b.dataset.mode));
+    } catch (err) {
+      toast((err && err.message) ? err.message : '切换模式失败');
+    }
+  };
+}
+if ($('testStripX')){
+  $('testStripX').onclick = () => {
+    $('testStrip').classList.remove('show');
+    _testStripClosed = true;        // 收起后本次会话不再出现
+  };
+}

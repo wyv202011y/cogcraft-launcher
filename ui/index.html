@@ -21,6 +21,10 @@
     <button class="iconbtn heart" id="btnDonate" hidden title="支持像素工坊" aria-label="捐赠">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
     </button>
+    <!-- 测试模式切换（Phase 5）：只有 beta/admin 档位渲染，normal 玩家 DOM 里都不显示 -->
+    <div id="modeSeg" role="group" aria-label="运行模式">
+      <button type="button" data-mode="normal" class="on">常规</button><button type="button" data-mode="test">测试</button>
+    </div>
     <button class="iconbtn" id="btnSettings" title="设置" aria-label="打开设置">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
     </button>
@@ -37,10 +41,17 @@
   <div class="main">
     <div class="grid"></div>
     <div class="hero">
+      <!-- 测试模式横幅（Phase 5）：beta/admin 且处于测试模式时才显示；× 只收起本次会话 -->
+      <div class="teststrip" id="testStrip">
+        <span>⚠ 测试服会崩、会回档、会突然维护，别在这里放东西</span>
+        <span class="x" id="testStripX" title="收起">×</span>
+      </div>
       <div class="mark"><span>cc</span></div>
       <h1>cogcraft <em>客户端</em></h1>
       <div class="srv"><span id="srvName">像素工坊</span><span class="sep">·</span>
         <span id="srvAddr">cogcraft.top:25565</span></div>
+      <!-- 管理员欢迎语（Phase 5）：仅 admin 档位，一行文字，不弹窗打断 -->
+      <div class="welcome" id="welcomeLine"></div>
     </div>
 
     <div class="steps" id="steps"></div>

@@ -11,6 +11,9 @@ function realApi(HWD){
     start: async () => ({ok:true}),
     launch: async () => ({ok:true}),
     set_variant: async (v) => { HWD.variant = v; return clone(HWD); },
+    // 真后端的 state 里 mode 是顶层字段；mock 两个都写，才和真状态同形
+    set_mode: async (m) => { HWD.mode = m; (HWD.settings = HWD.settings || {}).mode = m;
+                              return clone(HWD); },
     set_memory: async (m) => { if (HWD.memory) HWD.memory.xmx_mb = m; return clone(HWD); },
     set_player: async () => clone(HWD),
     set_auto_join: async () => clone(HWD),
@@ -114,6 +117,9 @@ function mockApi(){
     launch: async () => ({ok:true}),
     set_variant: async (v) => { HWD.variant = v; return clone(HWD); },
     set_memory: async (m) => { HWD.memory.xmx_mb = m; return clone(HWD); },
+    // 真后端的 state 里 mode 是顶层字段；mock 两个都写，才和真状态同形
+    set_mode: async (m) => { HWD.mode = m; (HWD.settings = HWD.settings || {}).mode = m;
+                              return clone(HWD); },
     set_player: async () => clone(HWD),
     set_auto_join: async () => clone(HWD),
     set_server_address: async () => clone(HWD),

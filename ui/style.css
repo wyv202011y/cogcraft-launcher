@@ -379,3 +379,28 @@ input[type=text]:focus{ border-color:#2f4a7a; }
 .acct-bindrow .s{ font-size:11.5px; color:var(--muted); margin-left:auto; }
 
 .acct-actions{ display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+
+/* ────────── 测试模式（Phase 5）──────────
+   只在 beta/admin 档位出现；normal 玩家整块不渲染（默认 display:none，.show 才出现）。
+   尺度按「小控件」来：切换是两格分段不是卡片，横幅是一条细带不是大块区域。 */
+#modeSeg{ display:none; align-items:center; border:1px solid var(--line2);
+  border-radius:7px; overflow:hidden; background:var(--bg2); }
+#modeSeg.show{ display:flex; }
+#modeSeg button{ all:unset; cursor:pointer; padding:5px 9px; font-size:11px;
+  line-height:1.25; color:var(--muted2); font-family:inherit;
+  transition:color .14s, background .14s; }
+#modeSeg button:hover{ color:var(--fg2); }
+#modeSeg button.on{ background:#1d2633; color:var(--accent2); }
+#modeSeg button+button{ border-left:1px solid var(--line2); }
+
+.welcome{ display:none; margin-top:6px; font-size:11.5px; color:var(--muted); }
+.welcome.show{ display:block; }
+.welcome b{ color:var(--accent2); font-weight:600; }
+
+.teststrip{ display:none; align-items:center; max-width:100%;
+  margin:0 0 12px; padding:5px 10px; border-radius:6px;
+  background:#16222b; border:1px solid #23424f; font-size:11px; color:#8fc7d8; }
+.teststrip.show{ display:flex; }
+.teststrip .x{ margin-left:auto; padding-left:10px; cursor:pointer;
+  color:#4d606b; font-size:12px; line-height:1; }
+.teststrip .x:hover{ color:#8fc7d8; }

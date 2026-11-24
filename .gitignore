@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 build/
 dist/
+# 打包用隔离 venv（PyInstaller 只能本平台打本平台，依赖不进仓）
+.venv-build/
 *.spec
 hmcl-fork/
 ui-shots/

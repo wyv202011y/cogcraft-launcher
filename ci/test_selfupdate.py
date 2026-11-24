@@ -26,6 +26,9 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "engine"))
 
 import selfupdate as su  # noqa: E402
+# 必须在下面 su.sys.platform = "darwin" 之前导入：那条赋值改的是真的 sys 模块，
+# 之后 urllib.request 会以为自己在 macOS 上，去 import 只有 mac 才有的 _scproxy 而炸。
+import assets as assets_mod  # noqa: E402
 
 RESULTS: list[tuple[bool, str]] = []
 
@@ -270,6 +273,62 @@ def main() -> int:
     ck("清理了 staging 和 backup", len(gone) == 2, f"清了 {len(gone)} 处")
     ck("清理后目录确实没了",
        not os.path.exists(su.staging_path(root)) and not os.path.exists(su.backup_path(root)))
+
+    # ── 7. 自更新不重下资源（Phase 4 防回归）────────────────────
+    print("\n【7】自更新不重下资源：资源目录的文件数 / mtime 必须一个都不变")
+
+    data = os.path.join(work, "appdata", "client")
+    obj_root = os.path.join(data, "assets", "objects")
+    OBJ_OLD = 1600000000             # 固定的过去时间：任何 touch 都看得出来
+    fps, objs = [], {}
+    for i in range(12):
+        h = "%040x" % (i * 7919 + 13)
+        sub = os.path.join(obj_root, h[:2])
+        os.makedirs(sub, exist_ok=True)
+        p = os.path.join(sub, h)
+        with open(p, "wb") as f:
+            f.write(b"x" * (100 + i))
+        os.utime(p, (OBJ_OLD, OBJ_OLD))
+        fps.append(p)
+        objs[f"obj{i}"] = {"hash": h, "size": 100 + i}
+
+    def snap() -> dict:
+        return {p: (os.path.getsize(p), int(os.path.getmtime(p)))
+                for p in fps if os.path.exists(p)}
+
+    def changed(a: dict, b: dict) -> int:
+        return sum(1 for k in set(a) | set(b) if a.get(k) != b.get(k))
+
+    before = snap()
+
+    # (a) 内容寻址跳过：库里的对象已存在且大小相符，就不该发一个请求
+    r7 = assets_mod.download_objects(objs, data)
+    ck("已存在的资源对象全部跳过（不联网）", r7.get("skipped_all") is True, str(r7))
+    ck("跳过时文件一个没少", len(snap()) == 12, f"{len(snap())}/12")
+    ck("跳过时 mtime 一个没动", changed(before, snap()) == 0,
+       f"变了 {changed(before, snap())} 个")
+
+    # (b) 真跑一次成功升级，资源目录同样一个字节都不许碰
+    shutil.rmtree(root)
+    fake_unit(apps, "cogcraft.app", "OLD3", writes_marker=False)
+    su.unpack(zgood, root)
+    old_proc3 = subprocess.Popen(["sleep", "30"])
+    marker3 = su.marker_path(state, "1.2.3")
+    _s3, argv3b = su.build_script(root, state, "1.2.3", pid=old_proc3.pid)
+    out3b = open(os.path.join(work, "p3b.out"), "w")
+    runner3b = subprocess.Popen(argv3b, env=dict(os.environ, FAKE_MARKER=marker3),
+                                stdout=out3b, stderr=subprocess.STDOUT)
+    time.sleep(1.0)
+    old_proc3.kill()
+    old_proc3.wait()
+    runner3b.wait(timeout=60)
+    out3b.close()
+
+    ver7 = open(os.path.join(root, "Contents", "version.txt")).read()
+    ck("自更新确实换成了新版", ver7 == "NEW", f"version.txt={ver7}")
+    ck("升级后资源文件数不变", len(snap()) == 12, f"{len(snap())}/12")
+    ck("升级后资源 mtime 一个没动", changed(before, snap()) == 0,
+       f"变了 {changed(before, snap())} 个")
 
     # ── 收尾 ─────────────────────────────────────────────────
     for p in (root,):

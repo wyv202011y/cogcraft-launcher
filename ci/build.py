@@ -60,6 +60,15 @@ def main() -> None:
         args += ["--hidden-import", "webview.platforms.winforms",
                  "--hidden-import", "clr",
                  "--collect-all", "webview"]
+    else:
+        # Linux：mac 有 WKWebView、win 有 WebView2，Linux 没有系统级 webview，
+        # pywebview 只能走 Qt 或 GTK。这里走 Qt —— 用 pip 装、能整包带进冻结包，
+        # 用户机器零依赖（GTK 路线包小一半，但要求系统装了 webkit2gtk + PyGObject）。
+        # 这几个包都是 pywebview 在函数里延迟 import 的，PyInstaller 静态扫不到，必须显式声明。
+        args += ["--hidden-import", "webview.platforms.qt",
+                 "--hidden-import", "qtpy",
+                 "--hidden-import", "PyQt5.QtWebEngineWidgets",
+                 "--hidden-import", "PyQt5.QtWebEngineCore"]
     # 图标：mac 必须 .icns（PyInstaller 会自动写进 CFBundleIconFile），win 用 .ico。
     # 上次打成默认 Python 图标就是因为这里没传 --icon、仓库里也没有素材。
     icon = None

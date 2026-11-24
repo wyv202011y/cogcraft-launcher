@@ -3,6 +3,16 @@
 
 'use strict';
 
+// 绑定相关响应：两条预览路径（注入真 state / 内置假 state）共用一份，
+// 验收时用 window.__BIND / window.__BIND_STATUS 注入各分支。
+const BIND_SHIMS = {
+  auth_bind_status: async () => JSON.parse(JSON.stringify(window.__BIND_STATUS || {bound:false})),
+  auth_bind_code: async () => JSON.parse(JSON.stringify(window.__BIND || {
+    ok: true, already_bound: false, code: "418302", expires_in: 300, robot_online: true,
+    ticket_url: "https://www.cogcraft.top/feedback/?gameid=Wangyingbo",
+  })),
+};
+
 function realApi(HWD){
   const clone = (o) => JSON.parse(JSON.stringify(o));
   return {
@@ -10,6 +20,7 @@ function realApi(HWD){
     state: async () => clone(HWD),
     start: async () => ({ok:true}),
     launch: async () => ({ok:true}),
+    ...BIND_SHIMS,
     set_variant: async (v) => { HWD.variant = v; return clone(HWD); },
     // 真后端的 state 里 mode 是顶层字段；mock 两个都写，才和真状态同形
     set_mode: async (m) => { HWD.mode = m; (HWD.settings = HWD.settings || {}).mode = m;
@@ -111,8 +122,7 @@ function mockApi(){
     auth_logout: async () => { HWD.auth = {logged_in:false}; return clone({ok:true}); },
     copy_text: async () => ({ok:true}),
     open_url: async () => ({ok:true}),
-    auth_bind_status: async () => clone({bound:false}),
-    auth_bind_code: async () => clone({ok:true, already_bound:false, code:"418302", expires_in:300}),
+    ...BIND_SHIMS,
     start: async () => ({ok:true}),
     launch: async () => ({ok:true}),
     set_variant: async (v) => { HWD.variant = v; return clone(HWD); },

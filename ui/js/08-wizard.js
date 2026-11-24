@@ -365,106 +365,15 @@ window.__steps = updateSteps;
 
 
 // ══════════════ 绑定 QQ（引导第 3 步的大板块）══════════════
-// 设计：一次只显示一个东西，字大、居中，玩家不用在群里翻聊天记录找码。
-let bigCd = null, bigPoll = null;
-
-function stopBigTimers(){
-  if (bigCd){ clearInterval(bigCd); bigCd = null; }
-  if (bigPoll){ clearInterval(bigPoll); bigPoll = null; }
-}
-
-function bindDoneHTML(qq){
-  return '<div class="binddone">' +
-      '<div class="binddone-ok">✓</div>' +
-      '<div class="binddone-t">已绑定 QQ ' + qq + '</div>' +
-      '<div class="binddone-s">以后服务器有通知会直接发到这里</div>' +
-    '</div>';
-}
-
+// 流程在 10-account.js 的 bindStart() 里 —— 那是唯一实现（引导与账号面板共用）。
+// 这里只给容器和「先不绑」的去向，别再往这里长第二份。
 async function fillBindArea(){
   const box = $('bindArea');
   if (!box) return;
-  stopBigTimers();
-
-  // 先看是不是已经绑过了
-  let st = null;
-  try { st = await api.auth_bind_status(); } catch (e){}
-  if (st && st.bound){ box.innerHTML = bindDoneHTML(st.qq_number); return; }
   if (!(S && S.auth && S.auth.logged_in)){
     box.innerHTML = '<div class="binderr">这一步需要先登录账号。</div>';
     return;
   }
-
-  box.innerHTML = '<div class="bindwait">正在获取验证码…</div>';
-  let r = null;
-  try { r = await api.auth_bind_code(); } catch (e){}
-
-  if (!r || r.ok === false){
-    box.innerHTML = '<div class="binderr">' + ((r && r.error) || '验证码没拿到，稍后再试。') +
-      '</div><div class="bindops"><button class="btn sub" id="bindRetry">重试</button></div>';
-    const bt = $('bindRetry');
-    if (bt) bt.onclick = () => fillBindArea();
-    return;
-  }
-  if (r.already_bound){ box.innerHTML = bindDoneHTML(r.qq_number); return; }
-
-  renderBindCode(box, String(r.code || ''), Number(r.expires_in || 300) || 300);
-}
-
-function renderBindCode(box, code, ttl){
-  const line = '绑定' + code;
-  box.innerHTML =
-    '<div class="bindbig">' +
-      '<div class="bindbig-lbl">把这行整条发到 QQ 群</div>' +
-      '<div class="bindbig-code">' + line + '</div>' +
-      '<div class="bindbig-cd" id="bindBigCd"></div>' +
-    '</div>' +
-    '<div class="bindops">' +
-      '<button class="btn sub" id="bindCopy">复制</button>' +
-      '<button class="btn sub" id="bindAgain">换一个</button>' +
-    '</div>' +
-    '<div class="bindskip"><a id="bindSkip">先不绑，直接下一步</a></div>';
-
-  const cp = $('bindCopy');
-  if (cp) cp.onclick = async () => {
-    try { await api.copy_text(line); cp.textContent = '已复制'; }
-    catch (e) { cp.textContent = '请手动复制'; }
-    setTimeout(() => { cp.textContent = '复制'; }, 1600);
-  };
-  const ag = $('bindAgain');
-  if (ag) ag.onclick = () => fillBindArea();
-  const sk = $('bindSkip');
-  if (sk) sk.onclick = () => { wStep++; renderWizard(); };
-
-  startBigCountdown(ttl);
-}
-
-function startBigCountdown(ttl){
-  stopBigTimers();
-  const end = Date.now() + ttl * 1000;
-
-  const tick = () => {
-    const el = $('bindBigCd');
-    if (!el) return;
-    const left = Math.max(0, Math.round((end - Date.now()) / 1000));
-    el.textContent = left > 0
-      ? ('验证码 ' + Math.floor(left / 60) + ':' + String(left % 60).padStart(2, '0') + ' 内有效')
-      : '这枚验证码过期了，点「换一个」';
-    if (left <= 0) stopBigTimers();
-  };
-  tick();
-  bigCd = setInterval(tick, 1000);
-
-  // 玩家去群里发完，这边自己变「已绑定」——机器人不回复，全靠这里显示
-  let n = 0;
-  bigPoll = setInterval(async () => {
-    if (++n % 3 !== 0) return;
-    let s = null;
-    try { s = await api.auth_bind_status(); } catch (e){ return; }
-    if (s && s.bound){
-      stopBigTimers();
-      const box = $('bindArea');
-      if (box) box.innerHTML = bindDoneHTML(s.qq_number);
-    }
-  }, 1000);
+  bindSkipCount = 0;
+  await bindStart(box, { onSkip: () => { wStep++; renderWizard(); } });
 }

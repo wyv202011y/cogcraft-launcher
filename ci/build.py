@@ -7,6 +7,7 @@ PyInstaller 不能交叉编译，所以每个平台各用自己的 runner 打。
 from __future__ import annotations
 import os
 import platform as pf
+import re
 import subprocess
 import sys
 import zipfile
@@ -25,6 +26,45 @@ SEP = ";" if os.name == "nt" else ":"          # --add-data 的分隔符各平�
 def run(cmd: list[str]) -> None:
     print("+", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True, cwd=ROOT)
+
+
+def app_version() -> str:
+    """版本号只在 app.py 有一份 VERSION，别在打包脚本里再写一个常量。"""
+    with open(os.path.join(ROOT, "app.py"), encoding="utf-8") as f:
+        for line in f:
+            m = re.match(r"""^VERSION\s*=\s*["']([^"']+)["']""", line)
+            if m:
+                return m.group(1)
+    raise SystemExit("app.py 里没找到 VERSION")
+
+
+def inject_mac_version(app_dir: str, ver: str) -> None:
+    """把版本号写进 .app 的 Info.plist，然后重新做一次临时签名。
+
+    PyInstaller 只会在 Info.plist 里写 0.0.0（版本号来自它自己的命令行参数），
+    访达「显示简介」和系统报告里就显示 0.0.0，跟 latest.json 对不上。
+
+    ⚠️ 顺序不能反：PyInstaller 打完包已经做过一次 ad-hoc 签名，
+    而 `_CodeSignature/CodeResources` 里记着 Info.plist 的哈希 —— 改完 plist
+    封条就失效，玩家拿到的是「已损坏、无法打开」的包。所以改完必须 codesign --force 重签。
+    不加 --deep：包里嵌套的 JRE 二进制签名本来就是好的，只重签外层就够，
+    --deep 反而会把它们连同 entitlements 一起覆盖掉。
+    """
+    plist = os.path.join(app_dir, "Contents", "Info.plist")
+    run(["plutil", "-replace", "CFBundleShortVersionString", "-string", ver, plist])
+    run(["plutil", "-replace", "CFBundleVersion", "-string", ver, plist])
+    run(["codesign", "--force", "--sign", "-", app_dir])
+
+    got = subprocess.run(["plutil", "-extract", "CFBundleShortVersionString", "raw", plist],
+                         capture_output=True, text=True).stdout.strip()
+    assert got == ver, f"Info.plist 版本号没写进去：{got!r} != {ver!r}"
+    info = subprocess.run(["codesign", "-dv", "--verbose=2", app_dir],
+                          capture_output=True, text=True)
+    detail = (info.stderr or info.stdout).strip().splitlines()
+    print(f"+ Info.plist 版本号 {got}", flush=True)
+    print("+ 重签后签名信息:", flush=True)
+    for line in detail[:5]:
+        print("   ", line, flush=True)
 
 
 def main() -> None:
@@ -93,6 +133,12 @@ def main() -> None:
         icns = [f for f in os.listdir(res_dir) if f.endswith(".icns")] if os.path.isdir(res_dir) else []
         assert icns, "macOS 包内没有 .icns，图标没打进去"
         print(f"+ 包内图标: {icns}", flush=True)
+
+    # 版本号：Info.plist 里的 0.0.0 会让访达「显示简介」和系统报告对不上 latest.json
+    if sys.platform == "darwin":
+        ver = app_version()
+        print(f"+ app.py VERSION = {ver}", flush=True)
+        inject_mac_version(os.path.join(ROOT, "dist", "cogcraft.app"), ver)
 
     # 打包：mac 必须是 .app，用 ditto 才保得住符号链接
     out_name = f"cogcraft-{sysname}-{arch}.zip"

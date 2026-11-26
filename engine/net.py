@@ -168,6 +168,108 @@ def _tls_ctx(insecure: bool = False) -> ssl.SSLContext:
 _IDLE_RECONNECT_SEC = 45.0
 
 
+# ──────────────── 内网直连兜底（服主在家调试用）────────────────
+# 家用宽带出口通常没有 NAT 回环：在同一个局域网里访问自己的公网域名，
+# 连接会被直接拒掉。这时把 cogcraft 的地址换成本机内网 IP 再试一次。
+#   · 只在「压根没连上」（拒绝连接 / DNS 失败 / 网络不可达）时触发，
+#     4xx/5xx、证书错、读到一半断流都不算 —— 那说明对面明明通着；
+#   · 只试一次，不叠加重试，别把一次断网放大成十几秒白等；
+#   · 正常路径一个字节都不改。
+LAN_HOST = "192.168.3.40"
+LAN_SITE_PORT = 25585      # 本机 nginx 静态站点：清单 / launcher 元数据 / 客户端文件
+LAN_AUTH_PORT = 8899       # 认证服的**生产形态**：合流在 modadmin 里，挂在 /auth 前缀下
+LAN_TIMEOUT = 4.0          # 内网这一跳只给 4 秒，别拖住界面
+
+_SITE_HOSTS = {"cogcraft.top", "www.cogcraft.top"}
+_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+_CONN_DOWN_ERRNO = {
+    111,  # ECONNREFUSED (Linux)
+    61,   # ECONNREFUSED (macOS/BSD)
+    101,  # ENETUNREACH (Linux)
+    51,   # ENETUNREACH (macOS/BSD)
+    113,  # EHOSTUNREACH (Linux)
+    65,   # EHOSTUNREACH (macOS/BSD)
+    60,   # ETIMEDOUT (macOS/BSD)
+}
+
+
+def lan_site_url(url: str) -> str | None:
+    """公网站点地址 → 内网直连地址。不是我们的域名就返回 None。"""
+    try:
+        u = urlsplit(url)
+    except Exception:
+        return None
+    if (u.hostname or "").lower() not in _SITE_HOSTS:
+        return None
+    path = u.path or "/"
+    q = ("?" + u.query) if u.query else ""
+    return f"http://{LAN_HOST}:{LAN_SITE_PORT}{path}{q}"
+
+
+def _has_auth_prefix(path: str) -> bool:
+    """`/auth` 必须是一个**完整路径段**才算已有前缀。
+
+    坑：`"/authserver/authenticate".startswith("/auth")` 是 True，
+    但它并没有 `/auth` 这一层 —— 按字面判会把前缀漏掉，内网直接 404。
+    """
+    return path == "/auth" or path.startswith("/auth/")
+
+
+def lan_auth_url(url: str) -> str | None:
+    """认证服地址 → 内网直连地址。
+
+    认证服的生产形态是**合流在 modadmin 里、挂在 `/auth` 前缀下**（`app.mount("/auth", …)`，
+    modadmin 监听 8899），所以：
+
+    · 公网写法 `https://cogcraft.top/auth/authserver/xxx`
+      → 内网 `http://192.168.3.40:8899/auth/authserver/xxx`（**前缀原样保留**，
+        去掉就是 404 —— 实测无前缀直接 404）；
+    · 没有清单时的兜底 `http://127.0.0.1:8081/authserver/xxx` 少了 `/auth`，
+      内网这一跳要把它补上。
+    """
+    try:
+        u = urlsplit(url)
+    except Exception:
+        return None
+    host = (u.hostname or "").lower()
+    path = u.path or "/"
+    if host in _SITE_HOSTS:
+        if not _has_auth_prefix(path):
+            return None          # 不是认证接口，别乱改
+    elif host in _LOOPBACK:
+        if not _has_auth_prefix(path):
+            path = "/auth" + path
+    else:
+        return None
+    q = ("?" + u.query) if u.query else ""
+    return f"http://{LAN_HOST}:{LAN_AUTH_PORT}{path}{q}"
+
+
+def _conn_down(err: BaseException, _depth: int = 0) -> bool:
+    """这个错误是不是「压根没连上」？只有这种情况才值得换内网地址再试。
+
+    会顺着异常链再找一层：上层把原始错误包成 `IOError("请求失败 …")` 时，
+    errno 已经丢了，只能靠 `__cause__` / `__context__` 摸回真正的 ConnectionRefusedError。
+    """
+    if isinstance(err, urllib.error.HTTPError):
+        return False             # 对面回话了，只是状态码不对
+    e: BaseException = err
+    if isinstance(e, urllib.error.URLError):
+        reason = getattr(e, "reason", None)
+        if isinstance(reason, BaseException):
+            e = reason
+    if isinstance(e, (ConnectionRefusedError, socket.gaierror, socket.herror)):
+        return True
+    if isinstance(e, OSError) and not isinstance(e, ssl.SSLError) and e.errno in _CONN_DOWN_ERRNO:
+        return True
+    if _depth < 3:
+        for attr in ("__cause__", "__context__"):
+            inner = getattr(e, attr, None)
+            if isinstance(inner, BaseException) and inner is not e and _conn_down(inner, _depth + 1):
+                return True
+    return False
+
+
 def _touch_conn(scheme: str, host: str, port: int, insecure: bool = False) -> None:
     """记一下这个连接最后一次干完活的时间，用来判断空闲了多久。"""
     used = getattr(_POOL, "used", None)
@@ -370,6 +472,10 @@ def _permanent(err: Exception) -> bool:
             inner = reason
     if isinstance(inner, ssl.SSLCertVerificationError):
         return True
+    # 压根没连上（拒绝连接 / DNS 失败 / 网络不可达）：重试同一个地址没有意义，
+    # 直接判「别再试了」，让上层立刻换内网地址试一次，别白等退避。
+    if _conn_down(inner):
+        return True
     if isinstance(inner, _TRANSIENT):
         return False
     if isinstance(inner, ssl.SSLError):
@@ -408,6 +514,18 @@ def _req(url: str, timeout: float, method: str = "GET") -> urllib.request.Reques
 
 def get_bytes(url: str, timeout: float = 30.0, retries: int = 3,
               ok_codes: tuple[int, ...] = (200, 206)) -> bytes:
+    """取一个 URL 的内容（小文件/JSON 用）。公网连不上时改走内网再试一次。"""
+    try:
+        return _get_bytes(url, timeout, retries, ok_codes)
+    except Exception as e:
+        alt = lan_site_url(url)
+        if not alt or not _conn_down(e):
+            raise
+        return _get_bytes(alt, min(timeout, LAN_TIMEOUT), 1, ok_codes)
+
+
+def _get_bytes(url: str, timeout: float = 30.0, retries: int = 3,
+               ok_codes: tuple[int, ...] = (200, 206)) -> bytes:
     """取一个 URL 的内容（小文件/JSON 用）。"""
     prefer_ipv4()
     last: Exception | None = None
@@ -424,11 +542,24 @@ def get_bytes(url: str, timeout: float = 30.0, retries: int = 3,
                 break
             if i < retries - 1:
                 _sleep_before_retry(i, e, 1.0)
-    raise IOError(f"请求失败 {url}: {last}")
+    raise IOError(f"请求失败 {url}: {last}") from last
 
 
 def get_conditional(url: str, timeout: float = 20.0, etag: str = "",
                     last_modified: str = "", retries: int = 2) -> dict:
+    """带 If-None-Match / If-Modified-Since 的 GET；公网连不上时改走内网再试一次。"""
+    try:
+        return _get_conditional(url, timeout, etag, last_modified, retries)
+    except Exception as e:
+        alt = lan_site_url(url)
+        if not alt or not _conn_down(e):
+            raise
+        # 内网这一跳不带条件头：换源后 ETag 对不上，带了只会多一次白跑
+        return _get_conditional(alt, min(timeout, LAN_TIMEOUT), "", "", 1)
+
+
+def _get_conditional(url: str, timeout: float = 20.0, etag: str = "",
+                     last_modified: str = "", retries: int = 2) -> dict:
     """带 If-None-Match / If-Modified-Since 的 GET，用来「安静地」轮询。
 
     服务端没改就回 304（body 为空，几十字节），不会白下整份清单：
@@ -469,12 +600,32 @@ def get_conditional(url: str, timeout: float = 20.0, etag: str = "",
                 break
             if i < retries - 1:
                 _sleep_before_retry(i, e, 1.0)
-    raise IOError(f"请求失败 {url}: {last}")
+    raise IOError(f"请求失败 {url}: {last}") from last
 
 
 def download_to(url: str, dest: str, timeout: float = 120.0, retries: int = 3,
                 chunk: int = 1 << 18, on_chunk=None,
                 allow_empty: bool = False, insecure: bool = False) -> int:
+    """下载到 dest（原子替换）。返回字节数。公网连不上时改走内网再试一次。
+
+    allow_empty: 整合包里确实存在 0 字节文件（如 ModernUI/bootstrap.properties），
+    默认把 0 字节当失败会把这类文件误报成下载失败。
+    insecure: 跳过证书链校验（只在调用方持有内容哈希时用，见 _tls_ctx）。
+    """
+    try:
+        return _download_to(url, dest, timeout, retries, chunk, on_chunk,
+                            allow_empty, insecure)
+    except Exception as e:
+        alt = lan_site_url(url)
+        if not alt or not _conn_down(e):
+            raise
+        return _download_to(alt, dest, timeout, 1, chunk, on_chunk,
+                            allow_empty, insecure)
+
+
+def _download_to(url: str, dest: str, timeout: float = 120.0, retries: int = 3,
+                 chunk: int = 1 << 18, on_chunk=None,
+                 allow_empty: bool = False, insecure: bool = False) -> int:
     """下载到 dest（原子替换）。返回字节数。
 
     allow_empty: 整合包里确实存在 0 字节文件（如 ModernUI/bootstrap.properties），
@@ -522,11 +673,22 @@ def download_to(url: str, dest: str, timeout: float = 120.0, retries: int = 3,
                 if isinstance(e, urllib.error.HTTPError) and e.code == 429:
                     retries = max(retries, i + 4)
                 _sleep_before_retry(i, e, 1.2)
-    raise IOError(f"下载失败 {url}: {last}")
+    raise IOError(f"下载失败 {url}: {last}") from last
 
 
 def head_ok(url: str, timeout: float = 20.0) -> tuple[bool, str]:
     """检查 URL 是否可下载（服务器/CDN 支持 HEAD 就用 HEAD，否则退 GET 首字节）。"""
+    ok, note = _head_ok(url, timeout)
+    if ok:
+        return ok, note
+    alt = lan_site_url(url)
+    if not alt:
+        return ok, note
+    ok2, note2 = _head_ok(alt, min(timeout, LAN_TIMEOUT))
+    return (ok2, f"{note2}（内网）") if ok2 else (ok, note)
+
+
+def _head_ok(url: str, timeout: float = 20.0) -> tuple[bool, str]:
     prefer_ipv4()
     try:
         with urllib.request.urlopen(_req(url, timeout, "HEAD"), timeout=timeout,

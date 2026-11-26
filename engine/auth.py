@@ -19,11 +19,13 @@ import os
 import time
 import urllib.error
 import urllib.request
+from typing import NoReturn
 
 # 没有下发清单时的兜底地址（本地开发 / 内网调试用）
 DEFAULT_API = "http://127.0.0.1:8081"
 
 TIMEOUT = 15
+LAN_AUTH_TIMEOUT = 4.0      # 换内网地址那一跳只给 4 秒（与 net.LAN_TIMEOUT 对齐）
 
 
 class AuthError(Exception):
@@ -46,8 +48,9 @@ def api_base(manifest: dict | None) -> str:
     return DEFAULT_API.rstrip("/")
 
 
-def _post(url: str, payload: dict | None, token: str | None = None) -> tuple[int, dict | str]:
-    """统一 POST。返回 (status, 解析后的 body)。"""
+def _post_once(url: str, payload: dict | None, token: str | None,
+               timeout: float) -> tuple[int, dict | str]:
+    """发一次请求。传输层错误原样抛出，由 _post 决定要不要换内网地址再试。"""
     data = json.dumps(payload).encode("utf-8") if payload is not None else b""
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Content-Type", "application/json")
@@ -55,7 +58,7 @@ def _post(url: str, payload: dict | None, token: str | None = None) -> tuple[int
     if token:
         req.add_header("Authorization", f"Bearer {token}")
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             raw = r.read().decode("utf-8", "replace")
             return r.status, (json.loads(raw) if raw.strip() else "")
     except urllib.error.HTTPError as e:
@@ -64,10 +67,43 @@ def _post(url: str, payload: dict | None, token: str | None = None) -> tuple[int
             return e.code, (json.loads(raw) if raw.strip() else "")
         except json.JSONDecodeError:
             return e.code, raw
-    except urllib.error.URLError as e:
+
+
+def _post(url: str, payload: dict | None, token: str | None = None) -> tuple[int, dict | str]:
+    """统一 POST。返回 (status, 解析后的 body)。
+
+    连不上认证服时**换内网地址再试一次**（服主在家用局域网调试：
+    家用出口没有 NAT 回环，公网域名或者没有清单时的 127.0.0.1:8081 都连不上）。
+    只试一次，且只对「压根没连上」生效 —— 4xx/5xx 是认证服在正常回话，绝不改源。
+    """
+    try:
+        return _post_once(url, payload, token, TIMEOUT)
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        alt = _lan_auth_url(url)
+        if alt is None:
+            _raise_net(e)
+        try:
+            return _post_once(alt, payload, token, LAN_AUTH_TIMEOUT)
+        except (urllib.error.URLError, TimeoutError, OSError):
+            _raise_net(e)
+
+
+def _raise_net(e: BaseException) -> NoReturn:
+    """把传输层错误翻成人话（文案保持原样，别让玩家看到 traceback）。"""
+    if isinstance(e, urllib.error.URLError):
         raise AuthError(f"连不上服务器（{e.reason}）。检查一下网络，或者稍后再试。") from e
-    except TimeoutError as e:
+    if isinstance(e, TimeoutError):
         raise AuthError("服务器没响应，可能网络不太行，稍后再试。") from e
+    raise AuthError(f"连不上服务器（{e}）。检查一下网络，或者稍后再试。") from e
+
+
+def _lan_auth_url(url: str) -> str | None:
+    """问 net 要内网地址；engine 目录可能在 sys.path 里，也可能不在，稳妥起见动态导入。"""
+    try:
+        import net
+        return net.lan_auth_url(url)
+    except Exception:
+        return None
 
 
 def _raise_for(status: int, body) -> None:
@@ -136,13 +172,24 @@ def fetch_tier(base: str, access_token: str, timeout: float = 6.0) -> str | None
     """
     if not access_token:
         return None
-    req = urllib.request.Request(f"{base}/client/tier", method="GET")
-    req.add_header("Accept", "application/json")
-    req.add_header("Authorization", f"Bearer {access_token}")
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            raw = r.read().decode("utf-8", "replace")
-    except Exception:
+
+    def _get(url: str, tmo: float) -> str | None:
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Accept", "application/json")
+        req.add_header("Authorization", f"Bearer {access_token}")
+        try:
+            with urllib.request.urlopen(req, timeout=tmo) as r:
+                return r.read().decode("utf-8", "replace")
+        except Exception:
+            return None
+
+    tier_url = f"{base}/client/tier"
+    raw = _get(tier_url, timeout)
+    if raw is None:                      # 公网连不上就换内网再问一次
+        alt = _lan_auth_url(tier_url)
+        if alt:
+            raw = _get(alt, LAN_AUTH_TIMEOUT)
+    if raw is None:
         return None
     try:
         d = json.loads(raw) if raw.strip() else {}
